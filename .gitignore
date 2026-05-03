@@ -1,0 +1,52 @@
+# Build artifacts
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.uv/
+
+# Secrets & credentials
+.env
+.env.local
+.env.example
+
+# Research / private project files (never publish these)
+.claude/
+archive/
+ecg-cardiac-trajectory/
+clinical-record-prediction/
+files/
+outreach/
+bioRxiv_submission/
+short_paper.md
+
+# Shell scripts (internal tooling)
+run_*.sh
+watch_*.sh
+
+# Model checkpoints & large binaries
+*.pt
+*.bin
+*.pkl
+*.safetensors
+*.npy
+*.npz
+*.h5
+
+# Data files (large, not for git)
+*.jsonl
+*.csv
+
+# Training logs
+logs/
+
+# Runtime lock files
+.claude/scheduled_tasks.lock
+
+# Misc
+.DS_Store
+Thumbs.db
+.vscode/
+.ipynb_checkpoints/

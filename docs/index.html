@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cadence — Next Clinical Event Prediction from EHR Sequences</title>
+  <meta name="description" content="Cadence: A 5.86M-parameter neural model that predicts next clinical events from EHR sequences, achieving 34.18% top-1 accuracy and 36.95d MAE on MIMIC-IV — outperforming XGBoost on both metrics." />
+  <meta property="og:title" content="Cadence — Next Clinical Event Prediction" />
+  <meta property="og:description" content="A neural model grounded in the Narrative Velocity framework that beats XGBoost on MIMIC-IV next-event prediction." />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="static/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230072b5'/><text y='.85em' font-size='64' font-family='sans-serif' font-weight='bold' fill='white' x='18'>C</text></svg>" />
+</head>
+<body>
+
+<!-- ── Nav ───────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-inner">
+    <span class="nav-brand"><span>⬡</span> Cadence</span>
+    <ul class="nav-links">
+      <li><a href="#abstract">Abstract</a></li>
+      <li><a href="#results">Results</a></li>
+      <li><a href="#model">Model</a></li>
+      <li><a href="#quickstart">Quickstart</a></li>
+      <li><a href="#citation">Citation</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ── Hero ──────────────────────────────────────────────── -->
+<section id="hero">
+  <div class="container">
+    <h1>Cadence</h1>
+    <p class="hero-subtitle">Next Clinical Event Prediction from EHR Sequences</p>
+    <p class="hero-paper">Cadence: Next Clinical Event Prediction in MIMIC-IV (A Comparative Evaluation of the Narrative Velocity Framework Against Established Baselines)</p>
+
+    <p class="authors">
+      <a href="https://github.com/amirrouh">Amir Rouhollahi</a>&nbsp;&nbsp;
+      <a href="#">Farhad R. Nezami</a>
+    </p>
+    <p class="affiliation">Brigham and Women's Hospital · Harvard Medical School · Boston, MA</p>
+
+    <div class="btn-row">
+      <a class="btn btn-primary" href="https://github.com/amirrouh/cadence" target="_blank">
+        <!-- github icon -->
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a class="btn btn-green" href="https://pypi.org/project/cadence-core/" target="_blank">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+        PyPI · cadence-core
+      </a>
+      <a class="btn" href="#citation">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        Paper (coming soon)
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Stats ─────────────────────────────────────────────── -->
+<div id="stats">
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-num">34.18%</div>
+      <div class="stat-label">Top-1 Accuracy · 100k tier</div>
+      <div class="stat-delta">+1.83pp vs XGBoost</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num">36.95d</div>
+      <div class="stat-label">MAE · 100k tier</div>
+      <div class="stat-delta">−1.63d vs XGBoost</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num">38.04%</div>
+      <div class="stat-label">Top-1 · Full male cohort</div>
+      <div class="stat-delta">810,988 training sequences</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num">5.86M</div>
+      <div class="stat-label">Parameters</div>
+      <div class="stat-delta">Single forward pass · no ensemble</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-num">7</div>
+      <div class="stat-label">Baselines compared</div>
+      <div class="stat-delta">XGBoost · FT-T · RETAIN · LSTM</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Abstract ──────────────────────────────────────────── -->
+<section id="abstract">
+  <div class="container">
+    <div class="section-label">Paper</div>
+    <h2>Abstract</h2>
+    <div class="abstract-box">
+      <div class="abstract-block">
+        <span class="tag">Background</span>
+        <p>Predicting the next clinical event from electronic health record (EHR) sequences — identifying both the event type and the time to its occurrence — is a fundamental challenge in clinical decision support. We present a large-scale comparative evaluation on MIMIC-IV v3.1, introducing <strong>Cadence</strong>, a novel neural model grounded in the <strong>Narrative Velocity (NV) feature-engineering framework</strong>.</p>
+      </div>
+      <div class="abstract-block">
+        <span class="tag">Methods</span>
+        <p>We evaluated seven model families on identical data splits from MIMIC-IV v3.1: Cadence (ours), XGBoost-884, FT-Transformer, Random Forest, Logistic Regression, LSTM, and RETAIN. All models predict next-event type (50-cluster vocabulary) and time-to-next-event jointly. Cadence is a <strong>5.86M-parameter residual MLP</strong> combining 884 Narrative Velocity features with two PubMedBERT text embeddings, trained with self-knowledge distillation and MixUp augmentation in a single forward pass. No ensemble, no competitor-model distillation, no external teacher. Reporting follows TRIPOD+AI guidelines.</p>
+      </div>
+      <div class="abstract-block">
+        <span class="tag">Findings</span>
+        <p>At the 100k training tier (male cohort), Cadence achieves the <strong>best top-1 accuracy (34.18%)</strong> and <strong>best MAE (36.95 d)</strong> across all seven models. At full-cohort scale (810,988 male / 999,497 female training sequences), Cadence achieves the best top-1 accuracy on both sexes (38.04% male, 35.66% female). Cross-seed standard deviations are ≤0.08 pp top-1 and ≤0.09 d MAE.</p>
+      </div>
+      <div class="abstract-block">
+        <span class="tag">External Validation</span>
+        <p>Cadence was evaluated on 1,120 patients from Brigham and Women's Hospital (BWH). Under pathological domain shift (Jensen–Shannon divergence 0.27), Cadence retains the <strong>highest accuracy (27.58%) with the smallest degradation (−6.67 pp)</strong> among all models, suggesting the PubMedBERT backbone provides a domain-stable representation.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Architecture ──────────────────────────────────────── -->
+<section id="model">
+  <div class="container">
+    <div class="section-label">Architecture</div>
+    <h2>The Cadence Model</h2>
+
+    <p>Cadence is a single <code>nn.Module</code> — one forward pass produces both the classification logits and the regression output. No ensemble, no multi-model tricks.</p>
+
+    <p>Input: 884 Narrative Velocity features + 768-dim PubMedBERT mean-history embedding + 768-dim last-event embedding → 3-block residual MLP backbone (2420→1024→1024→512) → classification head (50 classes) + regression head (19-bin time-to-event).</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <h4>884-dim NV Features</h4>
+        <p>Narrative Velocity scalars, population anomaly signals, structured lab/medication features, and temporal trajectory statistics from MIMIC-IV event sequences.</p>
+      </div>
+      <div class="feature-card">
+        <h4>PubMedBERT Embeddings</h4>
+        <p>768-dim mean-history embedding (last 10 events) and 768-dim last-event embedding from <code>BiomedNLP-BiomedBERT-base</code>. Fixed, not fine-tuned.</p>
+      </div>
+      <div class="feature-card">
+        <h4>Self-Knowledge Distillation</h4>
+        <p>NV-C → NV-C distillation (no competitor teacher). KL divergence from prior generation, α=0.5, T=4.0. Stochastic Weight Averaging from epoch 30.</p>
+      </div>
+      <div class="feature-card">
+        <h4>Joint Prediction</h4>
+        <p>50-class next-event classification via ASL loss + 19-bin quantile-spaced soft regression for time-to-next-event in a single forward pass.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Results ────────────────────────────────────────────── -->
+<section id="results">
+  <div class="container">
+    <div class="section-label">Results</div>
+    <h2>Benchmark Results</h2>
+
+    <h3>100k Training Tier · Male Cohort (n = 105,968 test)</h3>
+    <div class="results-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Top-1 (%)</th>
+            <th>Top-3 (%)</th>
+            <th>MAE (d)</th>
+            <th>Δ Top-1</th>
+            <th>Δ MAE</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="champion">
+            <td>Cadence (ours) · 3-seed SWA</td>
+            <td class="best">34.18 ± 0.07</td>
+            <td class="best">58.68 ± 0.04</td>
+            <td class="best">36.95 ± 0.06</td>
+            <td class="delta-pos">+1.83 pp</td>
+            <td class="delta-pos">−1.63 d</td>
+          </tr>
+          <tr>
+            <td>XGBoost-884 · 3-seed</td>
+            <td class="second">32.35 ± 0.10</td>
+            <td>56.28 ± 0.04</td>
+            <td>38.58 ± 0.20</td>
+            <td>—</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>FT-Transformer · 3-seed</td>
+            <td>30.92 ± 0.14</td>
+            <td>55.01 ± 0.12</td>
+            <td class="second">37.46 ± 0.31</td>
+            <td class="delta-neg">−1.43 pp</td>
+            <td class="delta-pos">−1.12 d</td>
+          </tr>
+          <tr>
+            <td>Random Forest · 3-seed</td>
+            <td>27.10 ± 0.06</td>
+            <td>49.45 ± 0.08</td>
+            <td>43.80 ± 0.11</td>
+            <td class="delta-neg">−5.25 pp</td>
+            <td class="delta-neg">+5.22 d</td>
+          </tr>
+          <tr>
+            <td>LSTM · 3-seed</td>
+            <td>24.63 ± 0.21</td>
+            <td>46.19 ± 0.30</td>
+            <td>45.12 ± 0.44</td>
+            <td class="delta-neg">−7.72 pp</td>
+            <td class="delta-neg">+6.54 d</td>
+          </tr>
+          <tr>
+            <td>RETAIN · 3-seed</td>
+            <td>23.81 ± 0.18</td>
+            <td>44.97 ± 0.22</td>
+            <td>46.03 ± 0.38</td>
+            <td class="delta-neg">−8.54 pp</td>
+            <td class="delta-neg">+7.45 d</td>
+          </tr>
+          <tr>
+            <td>Logistic Regression</td>
+            <td>28.49</td>
+            <td>51.22</td>
+            <td>47.61</td>
+            <td class="delta-neg">−3.86 pp</td>
+            <td class="delta-neg">+8.66 d</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="figure-card">
+      <img src="static/figures/fig2_comparison.png" alt="Model comparison — 100k Male MIMIC-IV Test Set" />
+      <p class="caption"><strong>Figure.</strong> Head-to-head comparison of Cadence vs all baselines on the 100k male MIMIC-IV test set (n = 105,968). Cadence achieves 34.18% top-1 accuracy and 36.95d MAE, outperforming XGBoost (32.35% / 38.58d) on both metrics.</p>
+    </div>
+
+    <h3>Full-Cohort Scale</h3>
+    <div class="results-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Cohort</th>
+            <th>Train n</th>
+            <th>Top-1 (%)</th>
+            <th>MAE (d)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="champion">
+            <td>Cadence (ours) · 3-seed SWA</td>
+            <td>Male</td>
+            <td>810,988</td>
+            <td class="best">38.04 ± 0.03</td>
+            <td>29.39 ± 0.04</td>
+          </tr>
+          <tr class="champion">
+            <td>Cadence (ours) · 3-seed SWA</td>
+            <td>Female</td>
+            <td>999,497</td>
+            <td class="best">35.66 ± 0.05</td>
+            <td>39.88 ± 0.09</td>
+          </tr>
+          <tr>
+            <td>FT-Transformer · 2-seed</td>
+            <td>Male</td>
+            <td>810,988</td>
+            <td>36.57</td>
+            <td class="best">27.82</td>
+          </tr>
+          <tr>
+            <td>XGBoost-884 · 2-seed</td>
+            <td>Male</td>
+            <td>810,988</td>
+            <td class="second">34.21</td>
+            <td>35.04</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── Quickstart ─────────────────────────────────────────── -->
+<section id="quickstart">
+  <div class="container">
+    <div class="section-label">Code</div>
+    <h2>Quickstart</h2>
+    <p>Install the <code>cadence-core</code> package from PyPI — no server, no account required. The pre-trained checkpoint (~23 MB) downloads automatically on first run and is cached at <code>~/.cadence/checkpoints/</code>.</p>
+
+    <h3>Install</h3>
+    <div class="code-wrapper">
+      <div class="code-label">Shell</div>
+      <div class="code-block"><span class="prompt">$ </span><span class="kw">pip</span> install cadence-core
+      <button class="copy-btn" onclick="copyCode(this, 'pip install cadence-core')">Copy</button></div>
+    </div>
+
+    <h3>Load &amp; run inference</h3>
+    <div class="code-wrapper">
+      <div class="code-label">Python</div>
+      <div class="code-block" id="code-inference"><span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">import</span> torch
+<span class="kw">from</span> cadence <span class="kw">import</span> NVCClean, load_checkpoint
+
+<span class="cmt"># Download checkpoint once, then loads from cache</span>
+ckpt = load_checkpoint()
+
+bin_edges   = ckpt[<span class="str">"bin_edges"</span>].numpy()
+bin_centers = ckpt[<span class="str">"bin_centers"</span>].numpy()
+
+model = NVCClean(n_features=<span class="num">2420</span>, n_classes=<span class="num">48</span>,
+                 bin_edges_np=bin_edges, bin_centers_np=bin_centers)
+model.load_state_dict(ckpt[<span class="str">"model_state_dict"</span>])
+model.eval()
+
+<span class="cmt"># x: (N, 2420) — [884 NV features | 768 emb-mean | 768 emb-last]</span>
+x = np.load(<span class="str">"patient_features.npy"</span>)
+
+<span class="kw">with</span> torch.no_grad():
+    logits, reg_logits = model(torch.tensor(x, dtype=torch.float32))
+
+top1  = logits.argmax(dim=-<span class="num">1</span>)                          <span class="cmt"># predicted event cluster index</span>
+probs = torch.softmax(reg_logits, dim=-<span class="num">1</span>)
+days  = torch.expm1((probs * model.bin_centers).sum(-<span class="num">1</span>))  <span class="cmt"># days to next event</span>
+<button class="copy-btn" onclick="copyCode(this, document.getElementById('code-inference').innerText.replace('Copy','').trim())">Copy</button></div>
+    </div>
+
+    <p>The input vector is <strong>2,420-dimensional</strong>: 884 Narrative Velocity + structured clinical features, concatenated with two 768-dim PubMedBERT embeddings. See <a href="https://github.com/amirrouh/cadence">the repository</a> for the full feature extraction pipeline.</p>
+  </div>
+</section>
+
+<!-- ── Citation ───────────────────────────────────────────── -->
+<section id="citation">
+  <div class="container">
+    <div class="section-label">Cite</div>
+    <h2>Citation</h2>
+    <p>If you use Cadence or this benchmark in your work, please cite:</p>
+    <div class="bibtex-block" id="bibtex"><span class="bibtex-key">@article</span>{rouhollahi2026cadence,
+  <span class="bibtex-field">author</span>  = {<span class="bibtex-val">Rouhollahi, Amir and Nezami, Farhad R.</span>},
+  <span class="bibtex-field">title</span>   = {<span class="bibtex-val">Cadence: Next Clinical Event Prediction in {MIMIC-IV}
+             (A Comparative Evaluation of the Narrative Velocity
+             Framework Against Established Baselines)</span>},
+  <span class="bibtex-field">year</span>    = {<span class="bibtex-val">2026</span>},
+  <span class="bibtex-field">note</span>    = {<span class="bibtex-val">Preprint</span>},
+  <span class="bibtex-field">url</span>     = {<span class="bibtex-val">https://github.com/amirrouh/cadence</span>},
+}</div>
+    <button class="copy-btn" style="position:static; margin-top:10px; display:inline-flex; align-items:center; gap:6px;"
+      onclick="copyCode(this, document.getElementById('bibtex').innerText)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      Copy BibTeX
+    </button>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────── -->
+<footer>
+  <div class="container">
+    <p>
+      Brigham and Women's Hospital · Harvard Medical School ·
+      <a href="https://github.com/amirrouh/cadence" target="_blank">GitHub</a> ·
+      <a href="https://pypi.org/project/cadence-core/" target="_blank">PyPI</a>
+    </p>
+    <p style="margin-top:8px;">Data: MIMIC-IV v3.1 via <a href="https://physionet.org/content/mimiciv/3.1/" target="_blank">PhysioNet</a> (credentialed access)</p>
+  </div>
+</footer>
+
+<script>
+function copyCode(btn, text) {
+  navigator.clipboard.writeText(text.trim()).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>
