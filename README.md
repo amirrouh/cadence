@@ -124,15 +124,14 @@ Under domain shift with missing structured features, RETAIN achieves the best ov
 
 ## Paper & Citation
 
-> **Cadence: Next Clinical Event Prediction in MIMIC-IV (A Comparative Evaluation of the Narrative Velocity Framework Against Established Baselines)**
+> **Cadence: A Benchmark Evaluation of the Narrative Velocity Framework for Next Clinical Event Prediction in MIMIC-IV**
 > Rouhollahi A. and Nezami F.R. — *preprint*, 2026
 
 If you use cadence-core in your research, please cite:
 
 ```bibtex
 @article{rouhollahi2026cadence,
-  title   = {Cadence: Next Clinical Event Prediction in {MIMIC-IV} (A Comparative Evaluation
-             of the Narrative Velocity Framework Against Established Baselines)},
+  title   = {Cadence: A Benchmark Evaluation of the Narrative Velocity Framework for Next Clinical Event Prediction in {MIMIC-IV}},
   author  = {Rouhollahi, Amir and Nezami, Farhad R.},
   year    = {2026},
   url     = {https://amirrouh.github.io/cadence/}
