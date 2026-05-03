@@ -92,7 +92,6 @@
 <!-- ── Abstract ──────────────────────────────────────────── -->
 <section id="abstract">
   <div class="container">
-    <div class="section-label">Paper</div>
     <h2>Abstract</h2>
     <div class="abstract-box">
       <div class="abstract-block">
@@ -118,7 +117,6 @@
 <!-- ── Architecture ──────────────────────────────────────── -->
 <section id="model">
   <div class="container">
-    <div class="section-label">Architecture</div>
     <h2>The Cadence Model</h2>
 
     <p>Cadence is a single <code>nn.Module</code> — one forward pass produces both the classification logits and the regression output. No ensemble, no multi-model tricks.</p>
@@ -149,7 +147,6 @@
 <!-- ── Results ────────────────────────────────────────────── -->
 <section id="results">
   <div class="container">
-    <div class="section-label">Results</div>
     <h2>Benchmark Results</h2>
 
     <h3>100k Training Tier · Male Cohort (n = 105,968 test)</h3>
@@ -282,7 +279,6 @@
 <!-- ── Quickstart ─────────────────────────────────────────── -->
 <section id="quickstart">
   <div class="container">
-    <div class="section-label">Code</div>
     <h2>Quickstart</h2>
     <p>Install the <code>cadence-core</code> package from PyPI — no server, no account required. The pre-trained checkpoint (~23 MB) downloads automatically on first run and is cached at <code>~/.cadence/checkpoints/</code>.</p>
 
@@ -330,7 +326,6 @@ days  = torch.expm1((probs * model.bin_centers).sum(-<span class="num">1</span>)
 <!-- ── Citation ───────────────────────────────────────────── -->
 <section id="citation">
   <div class="container">
-    <div class="section-label">Cite</div>
     <h2>Citation</h2>
     <p>If you use Cadence or this benchmark in your work, please cite:</p>
     <div class="bibtex-block" id="bibtex"><span class="bibtex-key">@article</span>{rouhollahi2026cadence,
