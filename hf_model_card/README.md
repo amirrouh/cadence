@@ -20,7 +20,7 @@ pipeline_tag: text-classification
 
 [![PyPI](https://img.shields.io/pypi/v/cadence-core.svg)](https://pypi.org/project/cadence-core/)
 [![GitHub](https://img.shields.io/badge/GitHub-amirrouh%2Fcadence-blue)](https://github.com/amirrouh/cadence)
-[![Paper](https://img.shields.io/badge/Paper-preprint-green)](https://amirrouh.github.io/cadence/)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-10.64898%2F2026.05.06.722409-b31b1b)](https://doi.org/10.64898/2026.05.06.722409)
 
 ## Model Description
 
@@ -102,8 +102,10 @@ Trained on MIMIC-IV v3.1 (PhysioNet credentialed access required):
 @article{rouhollahi2026cadence,
   title   = {Cadence: A Benchmark Evaluation of the Narrative Velocity Framework for Next Clinical Event Prediction in {MIMIC-IV}},
   author  = {Rouhollahi, Amir and Nezami, Farhad R.},
+  journal = {bioRxiv},
   year    = {2026},
-  url     = {https://amirrouh.github.io/cadence/}
+  doi     = {10.64898/2026.05.06.722409},
+  url     = {https://doi.org/10.64898/2026.05.06.722409}
 }
 ```
 

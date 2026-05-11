@@ -4,6 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/cadence-core.svg)](https://pypi.org/project/cadence-core/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub release](https://img.shields.io/github/v/release/amirrouh/cadence?label=release)](https://github.com/amirrouh/cadence/releases/tag/v1.0.0)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-10.64898%2F2026.05.06.722409-b31b1b)](https://doi.org/10.64898/2026.05.06.722409)
 
 **cadence-core** is a pretrained neural model for next clinical event prediction from electronic health record (EHR) sequences. Given a patient's longitudinal clinical history, it predicts which of 48 clinical event categories will occur next and how many days until that event.
 
@@ -125,7 +126,7 @@ Under domain shift with missing structured features, RETAIN achieves the best ov
 ## Paper & Citation
 
 > **Cadence: A Benchmark Evaluation of the Narrative Velocity Framework for Next Clinical Event Prediction in MIMIC-IV**
-> Rouhollahi A. and Nezami F.R. — *preprint*, 2026
+> Rouhollahi A. and Nezami F.R. — *bioRxiv*, 2026. [doi.org/10.64898/2026.05.06.722409](https://doi.org/10.64898/2026.05.06.722409)
 
 If you use cadence-core in your research, please cite:
 
@@ -133,8 +134,10 @@ If you use cadence-core in your research, please cite:
 @article{rouhollahi2026cadence,
   title   = {Cadence: A Benchmark Evaluation of the Narrative Velocity Framework for Next Clinical Event Prediction in {MIMIC-IV}},
   author  = {Rouhollahi, Amir and Nezami, Farhad R.},
+  journal = {bioRxiv},
   year    = {2026},
-  url     = {https://amirrouh.github.io/cadence/}
+  doi     = {10.64898/2026.05.06.722409},
+  url     = {https://doi.org/10.64898/2026.05.06.722409}
 }
 ```
 
