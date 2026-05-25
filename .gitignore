@@ -21,6 +21,10 @@ files/
 outreach/
 bioRxiv_submission/
 short_paper.md
+cadence.md
+scripts/
+paper/
+hf_model_card/
 
 # Shell scripts (internal tooling)
 run_*.sh

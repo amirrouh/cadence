@@ -26,11 +26,8 @@ Training method — Self-KD (NV-C → NV-C, allowed per project rules):
   - No XGBoost teacher, no competitor model teacher (TRIPOD+AI compliant)
 
 Usage:
-  cd /home/amir/projects/cadence
   uv run python clinical-record-prediction/src/mimic_train_nvc_clean.py \\
       --sex M --seed 42 --data-suffix 100k
-
-Promoted from: dev/experiments/nvc_emb_mean_last_selfkd_v2_swa30_100k_01/src/train.py
 """
 from __future__ import annotations
 
