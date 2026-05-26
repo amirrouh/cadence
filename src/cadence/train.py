@@ -1,7 +1,8 @@
 """
 cadence/train.py -- High-level training API for NVCClean.
 
-Public users call cadence.train() with their own JSONL data and embeddings.
+Public users call cadence.train() with their own JSONL data and embeddings,
+or cadence.train_classifier() with pre-built feature matrices.
 
 Scope note
 ----------
@@ -33,6 +34,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
 from torch.utils.data import DataLoader, TensorDataset
@@ -80,6 +82,108 @@ from .model import (
 log = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Helpers for binary / multiclass evaluation
+# ---------------------------------------------------------------------------
+
+def _evaluate_clf(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    task: str,
+) -> dict[str, float]:
+    """Evaluate a binary or multiclass NVCClean model."""
+    model.eval()
+    all_logits: list[torch.Tensor] = []
+    all_labels: list[torch.Tensor] = []
+
+    with torch.no_grad():
+        for X_b, y_b in loader:
+            X_b = X_b.to(device)
+            logits = model(X_b)
+            all_logits.append(logits.cpu())
+            all_labels.append(y_b)
+
+    logits = torch.cat(all_logits)
+    labels = torch.cat(all_labels)
+
+    if task == "binary":
+        probs = torch.sigmoid(logits.squeeze(1))
+        preds = (probs >= 0.5).long()
+        acc = (preds == labels).float().mean().item()
+        return {"accuracy": acc}
+    else:
+        preds = logits.argmax(dim=1)
+        acc = (preds == labels).float().mean().item()
+        top3 = logits.topk(min(3, logits.size(1)), dim=1).indices
+        top3_acc = (top3 == labels.unsqueeze(1)).any(dim=1).float().mean().item()
+        return {"accuracy": acc, "top3_acc": top3_acc}
+
+
+def _run_clf_loop(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    device: torch.device,
+    task: str,
+    total_epochs: int,
+    lr: float,
+    out_dir: Path | None,
+) -> tuple[float, dict[str, float]]:
+    """
+    Simple supervised training loop for binary/multiclass tasks.
+    Returns (best_val_accuracy, best_val_metrics).
+    """
+    if task == "binary":
+        loss_fn: nn.Module = nn.BCEWithLogitsLoss()
+    else:
+        loss_fn = nn.CrossEntropyLoss()
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=lr * 0.1)
+
+    best_val_acc = 0.0
+    best_val_m: dict[str, float] = {}
+    best_ckpt = (out_dir / "best_model.pt") if out_dir is not None else None
+
+    for epoch in range(1, total_epochs + 1):
+        model.train()
+        t0 = time.time()
+        total_loss = 0.0
+        n_batches = 0
+
+        for X_b, y_b in train_loader:
+            X_b = X_b.to(device)
+            y_b = y_b.to(device)
+            optimizer.zero_grad()
+            logits = model(X_b)
+            if task == "binary":
+                loss = loss_fn(logits.squeeze(1), y_b.float())
+            else:
+                loss = loss_fn(logits, y_b)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+
+        scheduler.step()
+        val_m = _evaluate_clf(model, val_loader, device, task)
+        elapsed = time.time() - t0
+        log.info(
+            "Epoch %2d/%d  loss=%.4f  val_acc=%.4f  [%.1fs]",
+            epoch, total_epochs, total_loss / max(1, n_batches), val_m["accuracy"], elapsed,
+        )
+
+        if val_m["accuracy"] > best_val_acc:
+            best_val_acc = val_m["accuracy"]
+            best_val_m = val_m
+            if best_ckpt is not None:
+                torch.save(model.state_dict(), best_ckpt)
+
+    return best_val_acc, best_val_m
+
+
 def train(
     train_jsonl: str | Path,
     val_jsonl: str | Path,
@@ -94,9 +198,16 @@ def train(
     device_str: str | None = None,
     validate_inputs: bool = True,
     test_jsonl: str | Path | None = None,
+    task: str = "next_event",
+    label_field: str | None = None,
+    n_classes: int | None = None,
 ) -> dict[str, Any]:
     """
     Train a Cadence NVCClean model on user-supplied data.
+
+    The default task='next_event' reproduces the paper's setup exactly (joint
+    classification + regression, MixUp, ASL loss, SWA). For arbitrary labels
+    see the task, label_field, and n_classes arguments below.
 
     Input format: each JSONL file contains one JSON object per line:
     {
@@ -107,6 +218,7 @@ def train(
         ...
       ],
       "target": {"cluster_id": 12, "days_from_prev": 14.0}
+                 # for binary/multiclass: {"<label_field>": 0}
     }
 
     The embeddings file (embeddings_path) is a .npy array of shape
@@ -130,7 +242,8 @@ def train(
         val_jsonl:        Path to validation JSONL file.
         embeddings_path:  Path to .npy embeddings file (N_events, emb_dim).
         event_index_path: Path to event index JSON file.
-        n_clusters:       Number of event clusters (classes to predict).
+        n_clusters:       Number of event clusters (used for feature building;
+                          ignored as the classification target for binary/multiclass tasks).
         out_dir:          Directory for checkpoint and metadata outputs.
         n_epochs:         Total training epochs (default: PHASE1_EPOCHS + PHASE2_EPOCHS = 140).
                           For quick tests, pass e.g. n_epochs=5.
@@ -139,6 +252,12 @@ def train(
         device_str:       Device string ("cuda", "cpu", etc.). Auto-detected if None.
         validate_inputs:  Run schema validation on JSONL files (default True).
         test_jsonl:       Optional path to test JSONL for final evaluation.
+        task:             "next_event" (default), "binary", or "multiclass".
+                          "next_event" preserves v1.1.1 behavior exactly.
+        label_field:      Key in target object holding the label. Required for
+                          binary and multiclass tasks.
+        n_classes:        Number of classes. Required for multiclass; binary
+                          always uses 1 output logit.
 
     Returns:
         Classifier dict with keys:
@@ -146,10 +265,12 @@ def train(
           "swa_path":      str, path to SWA checkpoint (swa_model.pt) or None.
           "out_dir":       str, output directory.
           "n_features":    int, total input dimensionality.
-          "n_clusters":    int, number of event classes.
-          "n_classes":     int, actual number of classes seen in training.
-          "bin_edges":     list[float], quantile bin edges.
-          "bin_centers":   list[float], quantile bin centers.
+          "n_clusters":    int, number of event clusters (feature building).
+          "n_classes":     int, actual number of classes used.
+          "task":          str, task type ("next_event", "binary", "multiclass").
+          "label_field":   str or None, label field used.
+          "bin_edges":     list[float], quantile bin edges (next_event only).
+          "bin_centers":   list[float], quantile bin centers (next_event only).
           "feat_mean":     list[float], feature standardization mean.
           "feat_std":      list[float], feature standardization std.
           "val_metrics":   dict, validation metrics from best checkpoint.
@@ -158,9 +279,17 @@ def train(
 
     Raises:
         FileNotFoundError: If any input path does not exist.
-        ValueError: On malformed input data.
-        RuntimeError: If Phase 1 fails the early-stop check (best val top-1 < 18%).
+        ValueError: On malformed input data or invalid task arguments.
+        RuntimeError: If Phase 1 fails the early-stop check (best val top-1 < 2%).
     """
+    # Validate task args
+    if task not in ("next_event", "binary", "multiclass"):
+        raise ValueError(f"task must be 'next_event', 'binary', or 'multiclass'; got {task!r}")
+    if task in ("binary", "multiclass") and label_field is None:
+        raise ValueError(f"label_field is required for task={task!r}")
+    if task == "multiclass" and n_classes is None:
+        raise ValueError("n_classes is required for task='multiclass'")
+
     train_jsonl      = Path(train_jsonl)
     val_jsonl        = Path(val_jsonl)
     embeddings_path  = Path(embeddings_path)
@@ -187,8 +316,8 @@ def train(
     p2_epochs = max(0, total_epochs - p1_epochs)
     log.info("Training budget: %d epochs (Phase1=%d, Phase2=%d)", total_epochs, p1_epochs, p2_epochs)
 
-    # Input validation
-    if validate_inputs:
+    # Input validation (next_event only — schema requires cluster_id/days_from_prev)
+    if validate_inputs and task == "next_event":
         log.info("Validating JSONL schema ...")
         validate_jsonl(train_jsonl, n_clusters=n_clusters)
         validate_jsonl(val_jsonl,   n_clusters=n_clusters)
@@ -220,33 +349,61 @@ def train(
             test_jsonl, prior, embeddings, event_id_map, n_clusters, max_history
         )
 
-    # Label remapping (dense [0, n_classes))
-    train_classes   = np.unique(y_cls_train)
-    n_clf_classes   = len(train_classes)
-    if n_clf_classes < n_clusters:
-        log.warning(
-            "Train has only %d/%d cluster IDs -- remapping to dense [0, %d)",
-            n_clf_classes, n_clusters, n_clf_classes,
-        )
-        c2d = {c: i for i, c in enumerate(train_classes)}
-        y_cls_train = np.array([c2d[c] for c in y_cls_train], dtype=np.int32)
-        y_cls_val   = np.array([c2d.get(c, -1) for c in y_cls_val],   dtype=np.int32)
-        if y_cls_test is not None:
-            y_cls_test = np.array([c2d.get(c, -1) for c in y_cls_test], dtype=np.int32)
+    # For binary/multiclass: extract labels from target[label_field] instead of cluster_id
+    if task in ("binary", "multiclass"):
+        def _extract_labels(jsonl_path: Path) -> np.ndarray:
+            labels = []
+            with open(jsonl_path, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    line = line.strip()
+                    if line:
+                        rec = json.loads(line)
+                        lbl = rec["target"][label_field]
+                        labels.append(int(lbl))
+            return np.array(labels, dtype=np.int64)
 
-        for name, Xp, ycp, yrp in [
-            ("val", X_val, y_cls_val, y_reg_val),
-            ("test", X_test, y_cls_test, y_reg_test) if X_test is not None else (None, None, None, None),
-        ]:
-            if Xp is None:
-                continue
-            mask = ycp >= 0
-            if not mask.all():
-                log.warning("Dropping %d %s samples with unseen cluster IDs", (~mask).sum(), name)
-            if name == "val":
-                X_val, y_cls_val, y_reg_val = Xp[mask], ycp[mask], yrp[mask]
-            else:
-                X_test, y_cls_test, y_reg_test = Xp[mask], ycp[mask], yrp[mask]
+        y_cls_train = _extract_labels(train_jsonl)
+        y_cls_val   = _extract_labels(val_jsonl)
+        y_cls_test  = _extract_labels(test_jsonl) if test_jsonl is not None else None
+        # Determine actual n_clf_classes
+        if task == "binary":
+            n_clf_classes = 2
+        else:
+            n_clf_classes = int(n_classes)  # type: ignore[arg-type]
+        log.info(
+            "task=%s  label_field=%r  n_clf_classes=%d  "
+            "train_label_counts: %s",
+            task, label_field, n_clf_classes,
+            str(dict(zip(*np.unique(y_cls_train, return_counts=True)))),
+        )
+    else:
+        # next_event: existing label remapping (dense [0, n_classes))
+        train_classes = np.unique(y_cls_train)
+        n_clf_classes = len(train_classes)
+        if n_clf_classes < n_clusters:
+            log.warning(
+                "Train has only %d/%d cluster IDs -- remapping to dense [0, %d)",
+                n_clf_classes, n_clusters, n_clf_classes,
+            )
+            c2d = {c: i for i, c in enumerate(train_classes)}
+            y_cls_train = np.array([c2d[c] for c in y_cls_train], dtype=np.int32)
+            y_cls_val   = np.array([c2d.get(c, -1) for c in y_cls_val], dtype=np.int32)
+            if y_cls_test is not None:
+                y_cls_test = np.array([c2d.get(c, -1) for c in y_cls_test], dtype=np.int32)
+
+            for name, Xp, ycp, yrp in [
+                ("val", X_val, y_cls_val, y_reg_val),
+                ("test", X_test, y_cls_test, y_reg_test) if X_test is not None else (None, None, None, None),
+            ]:
+                if Xp is None:
+                    continue
+                mask = ycp >= 0
+                if not mask.all():
+                    log.warning("Dropping %d %s samples with unseen cluster IDs", (~mask).sum(), name)
+                if name == "val":
+                    X_val, y_cls_val, y_reg_val = Xp[mask], ycp[mask], yrp[mask]
+                else:
+                    X_test, y_cls_test, y_reg_test = Xp[mask], ycp[mask], yrp[mask]
 
     actual_n_features = X_train.shape[1]
     log.info(
@@ -263,6 +420,94 @@ def train(
         X_test = (X_test - feat_mean) / feat_std
 
     np.savez(out_dir / "feature_scaler.npz", mean=feat_mean, std=feat_std)
+
+    # -------------------------------------------------------------------------
+    # Branch: binary / multiclass use a simple supervised loop
+    # -------------------------------------------------------------------------
+    if task in ("binary", "multiclass"):
+        Xt = torch.from_numpy(X_train).float()
+        yt = torch.from_numpy(y_cls_train).long()
+        Xv = torch.from_numpy(X_val).float()
+        yv = torch.from_numpy(y_cls_val).long()
+
+        train_ds_clf = TensorDataset(Xt, yt)
+        val_ds_clf   = TensorDataset(Xv, yv)
+        batch_size_clf = min(BATCH_SIZE, len(Xt))
+        train_loader_clf = DataLoader(train_ds_clf, batch_size=batch_size_clf, shuffle=True,  num_workers=0)
+        val_loader_clf   = DataLoader(val_ds_clf,   batch_size=batch_size_clf, shuffle=False, num_workers=0)
+
+        clf_n_classes = 1 if task == "binary" else n_clf_classes
+        model = NVCClean(
+            n_features=actual_n_features,
+            n_classes=clf_n_classes,
+            task=task,
+            dropout=DROPOUT,
+            input_dropout=INPUT_DROPOUT,
+        ).to(device)
+
+        clf_lr = PHASE2_LR
+        clf_epochs = n_epochs if n_epochs is not None else (PHASE1_EPOCHS + PHASE2_EPOCHS)
+        best_ckpt = out_dir / "best_model.pt"
+
+        _, best_val_m = _run_clf_loop(
+            model, train_loader_clf, val_loader_clf, device, task,
+            clf_epochs, clf_lr, out_dir,
+        )
+
+        # Reload best checkpoint
+        if best_ckpt.exists():
+            model.load_state_dict(torch.load(best_ckpt, map_location=device, weights_only=True))
+        val_m_final = _evaluate_clf(model, val_loader_clf, device, task)
+
+        test_m_final = None
+        if X_test is not None and y_cls_test is not None:
+            Xe = torch.from_numpy(X_test).float()
+            ye = torch.from_numpy(y_cls_test).long()
+            test_ds_clf  = TensorDataset(Xe, ye)
+            test_loader_clf = DataLoader(test_ds_clf, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+            test_m_final = _evaluate_clf(model, test_loader_clf, device, task)
+            log.info("Test metrics: %s", test_m_final)
+
+        metadata = {
+            "n_features":  actual_n_features,
+            "n_clusters":  n_clusters,
+            "n_classes":   n_clf_classes,
+            "task":        task,
+            "label_field": label_field,
+            "emb_dim":     emb_dim,
+            "max_history": max_history,
+            "n_epochs":    clf_epochs,
+            "seed":        seed,
+        }
+        with open(out_dir / "metadata.json", "w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, indent=2)
+        if test_m_final is not None:
+            with open(out_dir / "test_metrics.json", "w", encoding="utf-8") as fp:
+                json.dump(test_m_final, fp, indent=2)
+
+        result: dict[str, Any] = {
+            "model_path":   str(best_ckpt),
+            "swa_path":     None,
+            "out_dir":      str(out_dir),
+            "n_features":   actual_n_features,
+            "n_clusters":   n_clusters,
+            "n_classes":    n_clf_classes,
+            "task":         task,
+            "label_field":  label_field,
+            "bin_edges":    [],
+            "bin_centers":  [],
+            "feat_mean":    feat_mean.squeeze().tolist(),
+            "feat_std":     feat_std.squeeze().tolist(),
+            "val_metrics":  val_m_final,
+            "test_metrics": test_m_final,
+            "metadata":     metadata,
+        }
+        log.info("Training complete (task=%s). Outputs written to: %s", task, out_dir)
+        return result
+
+    # -------------------------------------------------------------------------
+    # next_event: existing two-phase training (Phase 1 cls + Phase 2 cls+reg+SWA)
+    # -------------------------------------------------------------------------
 
     # Quantile bins
     log.info("=== Computing quantile bins from training log-days ===")
@@ -300,6 +545,7 @@ def train(
         bin_centers_np=bin_centers_np,
         dropout=DROPOUT,
         input_dropout=INPUT_DROPOUT,
+        task="next_event",
     ).to(device)
 
     swa_model  = AveragedModel(model)
@@ -556,19 +802,138 @@ def train(
             json.dump(test_m_final, fp, indent=2)
 
     result: dict[str, Any] = {
-        "model_path":  str(best_ckpt),
-        "swa_path":    swa_path_str,
-        "out_dir":     str(out_dir),
-        "n_features":  actual_n_features,
-        "n_clusters":  n_clusters,
-        "n_classes":   n_clf_classes,
-        "bin_edges":   bin_edges_np.tolist(),
-        "bin_centers": bin_centers_np.tolist(),
-        "feat_mean":   feat_mean.squeeze().tolist(),
-        "feat_std":    feat_std.squeeze().tolist(),
-        "val_metrics": val_m_final,
+        "model_path":   str(best_ckpt),
+        "swa_path":     swa_path_str,
+        "out_dir":      str(out_dir),
+        "n_features":   actual_n_features,
+        "n_clusters":   n_clusters,
+        "n_classes":    n_clf_classes,
+        "task":         "next_event",
+        "label_field":  None,
+        "bin_edges":    bin_edges_np.tolist(),
+        "bin_centers":  bin_centers_np.tolist(),
+        "feat_mean":    feat_mean.squeeze().tolist(),
+        "feat_std":     feat_std.squeeze().tolist(),
+        "val_metrics":  val_m_final,
         "test_metrics": test_m_final,
-        "metadata":    metadata,
+        "metadata":     metadata,
     }
     log.info("Training complete. Outputs written to: %s", out_dir)
+    return result
+
+
+def train_classifier(
+    X_train: "np.ndarray",
+    y_train: "np.ndarray",
+    X_val: "np.ndarray | None" = None,
+    y_val: "np.ndarray | None" = None,
+    *,
+    task: str = "binary",
+    n_classes: int | None = None,
+    n_epochs: int = 30,
+    out_dir: str | Path | None = None,
+    hidden_dims: tuple = (512, 256),
+    lr: float = 1e-3,
+    batch_size: int = 256,
+    seed: int = 42,
+    device_str: str | None = None,
+) -> dict[str, Any]:
+    """
+    Train NVCClean as a tabular classifier on pre-built feature matrices.
+
+    For users who already have a feature matrix (computed however they like)
+    and arbitrary labels. Skips JSONL parsing and feature building entirely.
+
+    Args:
+        X_train:      (N, D) numpy array of training features.
+        y_train:      (N,) numpy array of integer labels.
+        X_val:        Optional (M, D) validation features. If None, validation
+                      is skipped and the final checkpoint is saved after the last epoch.
+        y_val:        Optional (M,) validation labels (required if X_val provided).
+        task:         "binary" or "multiclass".
+        n_classes:    Number of classes. Required for multiclass; binary infers 2.
+        n_epochs:     Number of training epochs (default 30).
+        out_dir:      If set, saves best_model.pt checkpoint here.
+        hidden_dims:  Ignored (NVCClean architecture is fixed); kept for API symmetry.
+        lr:           Learning rate (default 1e-3).
+        batch_size:   Mini-batch size (default 256).
+        seed:         Random seed (default 42).
+        device_str:   Device string. Auto-detected if None.
+
+    Returns:
+        Classifier dict compatible with cadence.predict_from_features().
+        Keys: "model", "task", "n_features", "n_classes", "model_path",
+              "out_dir", "val_metrics".
+    """
+    if task not in ("binary", "multiclass"):
+        raise ValueError(f"task must be 'binary' or 'multiclass'; got {task!r}")
+    if task == "multiclass" and n_classes is None:
+        raise ValueError("n_classes is required for task='multiclass'")
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    if device_str is not None:
+        device = torch.device(device_str)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    out_path = Path(out_dir) if out_dir is not None else None
+    if out_path is not None:
+        out_path.mkdir(parents=True, exist_ok=True)
+
+    X_train = np.asarray(X_train, dtype=np.float32)
+    y_train = np.asarray(y_train, dtype=np.int64)
+    n_feat = X_train.shape[1]
+    clf_n_classes = 1 if task == "binary" else int(n_classes)  # type: ignore[arg-type]
+    actual_n_classes = 2 if task == "binary" else int(n_classes)  # type: ignore[arg-type]
+
+    model = NVCClean(
+        n_features=n_feat,
+        n_classes=clf_n_classes,
+        task=task,
+        dropout=DROPOUT,
+        input_dropout=INPUT_DROPOUT,
+    ).to(device)
+
+    Xt = torch.from_numpy(X_train)
+    yt = torch.from_numpy(y_train)
+    bs = min(batch_size, len(Xt))
+    train_ds  = TensorDataset(Xt, yt)
+    train_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=0)
+
+    val_loader_clf = None
+    if X_val is not None and y_val is not None:
+        Xv = torch.from_numpy(np.asarray(X_val, dtype=np.float32))
+        yv = torch.from_numpy(np.asarray(y_val, dtype=np.int64))
+        val_ds = TensorDataset(Xv, yv)
+        val_loader_clf = DataLoader(val_ds, batch_size=bs, shuffle=False, num_workers=0)
+
+    # If no val set, create a tiny dummy loader for API compatibility
+    if val_loader_clf is None:
+        val_loader_clf = train_loader
+
+    best_val_acc, best_val_m = _run_clf_loop(
+        model, train_loader, val_loader_clf, device, task,
+        n_epochs, lr, out_path,
+    )
+
+    # Reload best checkpoint if saved
+    model_path_str = None
+    if out_path is not None:
+        best_ckpt = out_path / "best_model.pt"
+        if best_ckpt.exists():
+            model.load_state_dict(torch.load(best_ckpt, map_location=device, weights_only=True))
+            model_path_str = str(best_ckpt)
+
+    model.eval()
+    result: dict[str, Any] = {
+        "model":        model,
+        "task":         task,
+        "n_features":   n_feat,
+        "n_classes":    actual_n_classes,
+        "model_path":   model_path_str,
+        "out_dir":      str(out_path) if out_path is not None else None,
+        "val_metrics":  best_val_m,
+    }
     return result

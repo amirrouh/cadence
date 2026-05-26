@@ -200,6 +200,8 @@ the patient and event for row `i` of `embeddings.npy`:
 
 ### Training
 
+The default `task='next_event'` reproduces the paper's setup. For arbitrary classification, see Custom Labels below.
+
 ```python
 import cadence
 
@@ -236,6 +238,78 @@ checkpoint uses 2420 dims (884 base + 768 + 768); the extra 614 base dims requir
 MIMIC-specific structured/temporal preprocessing pipelines not available publicly.
 The public model uses the same NVCClean architecture and training schedule (Phase 1
 classification + Phase 2 joint cls+reg + SWA + MixUp + ASL + Gaussian soft targets).
+
+---
+
+## Train on Custom Labels (Binary / Multiclass)
+
+Starting with v1.2.0, `cadence.train()` accepts `task="binary"` or `task="multiclass"` so you can train NVCClean on arbitrary labels instead of next-event prediction. Add a `label_field` key to your target objects and pass it along:
+
+```python
+import cadence
+
+# Binary classification on JSONL data
+# (your target objects include e.g. {"cluster_id": ..., "readmitted_30d": 1})
+classifier = cadence.train(
+    train_jsonl="train.jsonl",
+    val_jsonl="val.jsonl",
+    embeddings_path="embeddings.npy",
+    event_index_path="event_index.json",
+    n_clusters=50,
+    n_epochs=30,
+    out_dir="./runs/binary_run",
+    task="binary",
+    label_field="readmitted_30d",
+)
+preds = cadence.predict(
+    classifier,
+    "test.jsonl",
+    embeddings_path="embeddings.npy",
+    event_index_path="event_index.json",
+)
+# preds: [{"patient_id": "...", "probabilities": 0.83}, ...]
+
+# Multiclass (4 classes) on JSONL data
+classifier = cadence.train(
+    train_jsonl="train.jsonl",
+    val_jsonl="val.jsonl",
+    embeddings_path="embeddings.npy",
+    event_index_path="event_index.json",
+    n_clusters=50,
+    n_epochs=30,
+    out_dir="./runs/multiclass_run",
+    task="multiclass",
+    label_field="discharge_category",
+    n_classes=4,
+)
+preds = cadence.predict(
+    classifier,
+    "test.jsonl",
+    embeddings_path="embeddings.npy",
+    event_index_path="event_index.json",
+)
+# preds: [{"patient_id": "...", "probabilities": [0.1, 0.5, 0.3, 0.1]}, ...]
+```
+
+### Pre-built feature matrix
+
+If you already have a feature matrix, skip JSONL entirely:
+
+```python
+import cadence
+import numpy as np
+
+# X_train: (N, D) numpy array, y_train: (N,) integer labels
+classifier = cadence.train_classifier(
+    X_train, y_train,
+    X_val=X_val, y_val=y_val,
+    task="binary",
+    n_epochs=30,
+    out_dir="./runs/features_run",
+)
+probs = cadence.predict_from_features(classifier, X_test)
+# probs: (N,) array of probabilities for binary; (N, K) for multiclass
+```
 
 ---
 

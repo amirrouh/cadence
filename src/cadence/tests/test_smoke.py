@@ -12,8 +12,12 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
 
 TOY_DIR = Path(__file__).parent / "toy_data"
+TOY_BINARY = Path(__file__).parent / "toy_data_binary"
+TOY_MULTICLASS = Path(__file__).parent / "toy_data_multiclass"
 
 
 def test_smoke() -> None:
@@ -94,5 +98,130 @@ def test_smoke() -> None:
     print(f"  {len(preds)} predictions returned, sample: {preds[0]}")
 
 
+def test_smoke_binary() -> None:
+    import cadence
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = Path(tmp) / "smoke_binary"
+
+        result = cadence.train(
+            train_jsonl=TOY_BINARY / "train.jsonl",
+            val_jsonl=TOY_BINARY / "val.jsonl",
+            embeddings_path=TOY_BINARY / "embeddings.npy",
+            event_index_path=TOY_BINARY / "event_index.json",
+            n_clusters=4,
+            out_dir=out_dir,
+            n_epochs=2,
+            task="binary",
+            label_field="label",
+        )
+
+        assert result["task"] == "binary", f"task mismatch: {result['task']}"
+        assert "model_path" in result
+        assert "val_metrics" in result
+        assert "accuracy" in result["val_metrics"], f"val_metrics missing accuracy: {result['val_metrics']}"
+
+        preds = cadence.predict(
+            result,
+            TOY_BINARY / "test.jsonl",
+            embeddings_path=TOY_BINARY / "embeddings.npy",
+            event_index_path=TOY_BINARY / "event_index.json",
+        )
+
+        assert isinstance(preds, list), "predict must return a list"
+        assert len(preds) == 10, f"Expected 10 predictions, got {len(preds)}"
+        for i, p in enumerate(preds):
+            assert "patient_id" in p, f"pred[{i}] missing patient_id"
+            assert "probabilities" in p, f"pred[{i}] missing probabilities"
+            prob = p["probabilities"]
+            assert isinstance(prob, float), f"pred[{i}] probabilities should be float for binary, got {type(prob)}"
+            assert 0.0 <= prob <= 1.0, f"pred[{i}] probability out of [0,1]: {prob}"
+
+    print("cadence binary smoke test PASS")
+    print(f"  val_metrics={result['val_metrics']}")
+    print(f"  sample pred: {preds[0]}")
+
+
+def test_smoke_multiclass() -> None:
+    import cadence
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = Path(tmp) / "smoke_multiclass"
+
+        result = cadence.train(
+            train_jsonl=TOY_MULTICLASS / "train.jsonl",
+            val_jsonl=TOY_MULTICLASS / "val.jsonl",
+            embeddings_path=TOY_MULTICLASS / "embeddings.npy",
+            event_index_path=TOY_MULTICLASS / "event_index.json",
+            n_clusters=4,
+            out_dir=out_dir,
+            n_epochs=2,
+            task="multiclass",
+            label_field="label",
+            n_classes=4,
+        )
+
+        assert result["task"] == "multiclass", f"task mismatch: {result['task']}"
+        assert "model_path" in result
+        assert "accuracy" in result["val_metrics"], f"val_metrics missing accuracy: {result['val_metrics']}"
+
+        preds = cadence.predict(
+            result,
+            TOY_MULTICLASS / "test.jsonl",
+            embeddings_path=TOY_MULTICLASS / "embeddings.npy",
+            event_index_path=TOY_MULTICLASS / "event_index.json",
+        )
+
+        assert isinstance(preds, list), "predict must return a list"
+        assert len(preds) == 10, f"Expected 10 predictions, got {len(preds)}"
+        for i, p in enumerate(preds):
+            assert "patient_id" in p, f"pred[{i}] missing patient_id"
+            assert "probabilities" in p, f"pred[{i}] missing probabilities"
+            probs = p["probabilities"]
+            assert isinstance(probs, list), f"pred[{i}] probabilities should be list for multiclass"
+            assert len(probs) == 4, f"pred[{i}] expected 4 class probs, got {len(probs)}"
+            assert all(0.0 <= x <= 1.0 for x in probs), f"pred[{i}] probs out of [0,1]: {probs}"
+
+    print("cadence multiclass smoke test PASS")
+    print(f"  val_metrics={result['val_metrics']}")
+    print(f"  sample pred: {preds[0]}")
+
+
+def test_smoke_train_classifier() -> None:
+    import cadence
+
+    rng = np.random.RandomState(0)
+    X_train = rng.randn(50, 16).astype(np.float32)
+    y_train = (rng.rand(50) > 0.5).astype(int)
+    X_val   = rng.randn(20, 16).astype(np.float32)
+    y_val   = (rng.rand(20) > 0.5).astype(int)
+    X_test  = rng.randn(15, 16).astype(np.float32)
+
+    clf = cadence.train_classifier(
+        X_train, y_train,
+        X_val=X_val, y_val=y_val,
+        task="binary",
+        n_epochs=5,
+    )
+
+    assert clf["task"] == "binary", f"task mismatch: {clf['task']}"
+    assert clf["n_features"] == 16
+    assert clf["n_classes"] == 2
+    assert "val_metrics" in clf
+    assert "accuracy" in clf["val_metrics"], f"val_metrics missing accuracy: {clf['val_metrics']}"
+
+    probs = cadence.predict_from_features(clf, X_test)
+    assert hasattr(probs, "shape"), "predict_from_features should return numpy array"
+    assert probs.shape == (15,), f"Expected (15,) for binary, got {probs.shape}"
+    assert all(0.0 <= p <= 1.0 for p in probs), "Probabilities out of [0,1]"
+
+    print("cadence train_classifier smoke test PASS")
+    print(f"  val_metrics={clf['val_metrics']}")
+    print(f"  probs[:3]={probs[:3]}")
+
+
 if __name__ == "__main__":
     test_smoke()
+    test_smoke_binary()
+    test_smoke_multiclass()
+    test_smoke_train_classifier()

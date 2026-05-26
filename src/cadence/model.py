@@ -585,14 +585,18 @@ class NVCClean(nn.Module):
       Layer 3: Linear(1024->512)  -> BN -> GELU -> Dropout(0.3) [+ residual proj from 1024]
       Linear shortcut (on raw x, before input_drop):
         fm_linear: Linear(884, 512, bias=False) — linear shortcut from raw features
-      Fusion (reg path only):
+      Fusion (reg path only, task="next_event"):
         logits     = cls_head(h3)                    # classification: pure MLP, no shortcut
         h3_for_reg = h3 + 0.1 * fm_linear(x_raw)    # regression: MLP + linear shortcut
         reg_logits = reg_head(h3_for_reg)
-      Cls head: Linear(512->n_classes)
-      Reg head: Linear(512->N_BINS)
+      Cls head: Linear(512->n_classes)  [1 output for task="binary"]
+      Reg head: Linear(512->N_BINS)     [only built for task="next_event"]
 
-    Reg head inference:
+    task="next_event" (default): joint cls+reg, returns (cls_logits, reg_logits).
+    task="binary":    BCE classification, returns cls_logits (B, 1).
+    task="multiclass": CE classification, returns cls_logits (B, n_classes).
+
+    Reg head inference (next_event only):
       probs = softmax(reg_logits)
       pred_log_days = sum(probs * bin_centers)
       pred_days = expm1(pred_log_days)
@@ -603,27 +607,36 @@ class NVCClean(nn.Module):
 
     def __init__(
         self,
-        n_features:    int,
-        n_classes:     int,
-        bin_edges_np:  np.ndarray,   # (n_bins+1,) quantile edges in log-day space
-        bin_centers_np: np.ndarray,  # (n_bins,) midpoints in log-day space
-        dropout:       float = DROPOUT,
-        input_dropout: float = INPUT_DROPOUT,
+        n_features:     int,
+        n_classes:      int,
+        bin_edges_np:   np.ndarray | None = None,   # (n_bins+1,) quantile edges; required for next_event
+        bin_centers_np: np.ndarray | None = None,   # (n_bins,) midpoints; required for next_event
+        dropout:        float = DROPOUT,
+        input_dropout:  float = INPUT_DROPOUT,
+        task:           str = "next_event",         # "next_event" | "binary" | "multiclass"
     ) -> None:
         super().__init__()
 
-        n_bins = len(bin_centers_np)
-        self.n_bins = n_bins
+        if task not in ("next_event", "binary", "multiclass"):
+            raise ValueError(f"task must be 'next_event', 'binary', or 'multiclass'; got {task!r}")
+        self.task = task
         self.n_features = n_features
 
-        # Bin edges and centers — registered as buffers so they follow .to(device)
-        self.register_buffer("bin_edges",   torch.tensor(bin_edges_np,   dtype=torch.float32))
-        self.register_buffer("bin_centers", torch.tensor(bin_centers_np, dtype=torch.float32))
+        # Bin edges and centers — only for next_event
+        if task == "next_event":
+            if bin_edges_np is None or bin_centers_np is None:
+                raise ValueError("bin_edges_np and bin_centers_np are required for task='next_event'")
+            n_bins = len(bin_centers_np)
+            self.n_bins = n_bins
+            self.register_buffer("bin_edges",   torch.tensor(bin_edges_np,   dtype=torch.float32))
+            self.register_buffer("bin_centers", torch.tensor(bin_centers_np, dtype=torch.float32))
+        else:
+            self.n_bins = 0
 
         # Input-level feature dropout
         self.input_drop = nn.Dropout(input_dropout)
 
-        # Layer 1: 884 -> 1024
+        # Layer 1: n_features -> 1024
         self.layer1 = nn.Sequential(
             nn.Linear(n_features, 1024),
             nn.BatchNorm1d(1024),
@@ -647,23 +660,31 @@ class NVCClean(nn.Module):
         # Residual: project 1024->512 for skip connection
         self.res_proj = nn.Linear(1024, 512, bias=False)
 
-        self.cls_head = nn.Linear(512, n_classes)
+        # Classification head: n_classes outputs (1 for binary, K for multiclass/next_event)
+        cls_out = 1 if task == "binary" else n_classes
+        self.cls_head = nn.Linear(512, cls_out)
 
-        # Quantile-bin reg head (n_bins may differ from 40 after dedup)
-        self.reg_head = nn.Linear(512, n_bins)
-
-        # ── Regression-only raw-feature linear shortcut ───────────────────────
-        # fm_linear: linear shortcut from raw features -> 512, injected ONLY into reg path
-        # No fm_v (pairwise FM removed — only linear shortcut remains)
-        self.fm_linear = nn.Linear(n_features, 512, bias=False)
+        # Regression-only raw-feature linear shortcut and reg head (next_event only)
+        if task == "next_event":
+            self.reg_head = nn.Linear(512, self.n_bins)
+            self.fm_linear = nn.Linear(n_features, 512, bias=False)
+        else:
+            self.reg_head = None
+            self.fm_linear = None
 
         self._init_weights()
         n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        log.info(
-            "NVCClean-RegOnlyShortcut parameters: %d (%.1fK)  n_bins=%d  "
-            "fm_linear=%d (reg-only shortcut, cls path untouched)",
-            n_params, n_params / 1000, n_bins, self.fm_linear.weight.numel(),
-        )
+        if task == "next_event":
+            log.info(
+                "NVCClean-RegOnlyShortcut parameters: %d (%.1fK)  n_bins=%d  "
+                "fm_linear=%d (reg-only shortcut, cls path untouched)",
+                n_params, n_params / 1000, self.n_bins, self.fm_linear.weight.numel(),
+            )
+        else:
+            log.info(
+                "NVCClean-%s parameters: %d (%.1fK)  cls_out=%d",
+                task, n_params, n_params / 1000, cls_out,
+            )
 
     def _init_weights(self) -> None:
         for m in self.modules():
@@ -674,30 +695,30 @@ class NVCClean(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
-        # fm_linear uses kaiming_normal_ via the loop above (no special init needed)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # Save raw features BEFORE input_drop for linear shortcut computation
-        x_raw = x                              # (B, n_features)
-
-        # ── Linear shortcut from raw features -> 512 (reg path only) ─────────
-        fm_linear_out = self.fm_linear(x_raw)  # (B, 512)
-
+    def forward(self, x: torch.Tensor):
         # ── MLP backbone ──────────────────────────────────────────────────────
+        if self.task == "next_event":
+            # Save raw features BEFORE input_drop for linear shortcut
+            x_raw = x
+            fm_linear_out = self.fm_linear(x_raw)   # (B, 512)
+
         x  = self.input_drop(x)
         h1 = self.layer1(x)           # (B, 1024)
         h2 = self.layer2(h1)          # (B, 1024)
         h3 = self.layer3(h2) + self.res_proj(h2)  # (B, 512)
 
         # ── Heads ─────────────────────────────────────────────────────────────
-        # Classification: pure MLP path — no shortcut, no FM bias
-        logits = self.cls_head(h3)             # (B, n_classes)
+        logits = self.cls_head(h3)    # (B, cls_out)
 
-        # Regression: h3 + linear shortcut from raw features
-        h3_for_reg = h3 + self.FM_LINEAR_SCALE * fm_linear_out  # (B, 512)
-        reg_logits = self.reg_head(h3_for_reg)                  # (B, N_BINS)
+        if self.task == "next_event":
+            # Regression: h3 + linear shortcut from raw features
+            h3_for_reg = h3 + self.FM_LINEAR_SCALE * fm_linear_out  # (B, 512)
+            reg_logits = self.reg_head(h3_for_reg)                  # (B, N_BINS)
+            return logits, reg_logits
 
-        return logits, reg_logits
+        # binary/multiclass: return cls_logits only
+        return logits
 
 
 def reg_logits_to_days(reg_logits: torch.Tensor, bin_centers: torch.Tensor) -> torch.Tensor:

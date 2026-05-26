@@ -9,16 +9,17 @@ Cadence is a 5.86M-parameter residual MLP that combines:
 Joint classification (next clinical event cluster) + regression (days to next event).
 Achieves 34.18% top-1 accuracy and 36.95 days MAE on MIMIC-IV (paper checkpoint).
 
-Public training API (v1.1.0): supply your own JSONL data and per-event embeddings.
+Public training API (v1.2.0): supply your own JSONL data and per-event embeddings,
+or use train_classifier() with pre-built feature matrices and arbitrary labels.
 """
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 from cadence.model import NVCClean, main
 from cadence.features import build_feature_matrix, build_population_prior
 from cadence.data import load_embeddings, validate_jsonl
-from cadence.train import train
-from cadence.inference import predict
+from cadence.train import train, train_classifier
+from cadence.inference import predict, predict_from_features
 
 __all__ = [
     "NVCClean",
@@ -28,6 +29,8 @@ __all__ = [
     "load_embeddings",
     "validate_jsonl",
     "train",
+    "train_classifier",
     "predict",
+    "predict_from_features",
     "__version__",
 ]

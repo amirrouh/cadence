@@ -104,8 +104,9 @@ def predict(
         metadata     = classifier.get("metadata", {})
         n_features   = classifier["n_features"]
         n_classes    = classifier["n_classes"]
-        bin_edges_np = np.array(classifier["bin_edges"],   dtype=np.float32)
-        bin_centers_np = np.array(classifier["bin_centers"], dtype=np.float32)
+        task         = classifier.get("task", "next_event")
+        bin_edges_np = np.array(classifier.get("bin_edges", []),   dtype=np.float32)
+        bin_centers_np = np.array(classifier.get("bin_centers", []), dtype=np.float32)
         feat_mean    = np.array(classifier["feat_mean"],   dtype=np.float32).reshape(1, -1)
         feat_std     = np.array(classifier["feat_std"],    dtype=np.float32).reshape(1, -1)
         n_clusters   = classifier["n_clusters"]
@@ -151,12 +152,22 @@ def predict(
     # -------------------------------------------------------------------------
     # Load model
     # -------------------------------------------------------------------------
-    model = NVCClean(
-        n_features=n_features,
-        n_classes=n_classes,
-        bin_edges_np=bin_edges_np,
-        bin_centers_np=bin_centers_np,
-    ).to(device)
+    if task == "next_event":
+        model = NVCClean(
+            n_features=n_features,
+            n_classes=n_classes,
+            bin_edges_np=bin_edges_np,
+            bin_centers_np=bin_centers_np,
+            task="next_event",
+        ).to(device)
+    else:
+        # binary: n_classes stored in dict is 2, but NVCClean uses cls_out=1
+        clf_out = 1 if task == "binary" else n_classes
+        model = NVCClean(
+            n_features=n_features,
+            n_classes=clf_out,
+            task=task,
+        ).to(device)
 
     state = torch.load(ckpt_path, map_location=device, weights_only=True)
     # Handle AveragedModel wrapper (swa_model.pt has 'module.' prefix)
@@ -169,51 +180,124 @@ def predict(
     # Inference
     # -------------------------------------------------------------------------
     X_t = torch.from_numpy(X).float().to(device)
-    bin_centers_t = model.bin_centers
-
-    results: list[dict[str, Any]] = []
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
         record_lines = [l.strip() for l in f if l.strip()]
 
     CHUNK = 512
-    all_top3_clusters = []
-    all_top3_probs    = []
-    all_days          = []
+    results: list[dict[str, Any]] = []
 
-    with torch.no_grad():
-        for start in range(0, len(X_t), CHUNK):
-            X_b     = X_t[start : start + CHUNK]
-            logits, reg_logits = model(X_b)
+    if task == "next_event":
+        bin_centers_t = model.bin_centers
+        all_top3_clusters = []
+        all_top3_probs    = []
+        all_days          = []
 
-            probs    = F.softmax(logits, dim=-1)
-            top3     = probs.topk(min(3, probs.size(1)), dim=1)
-            top3_cls = top3.indices.cpu().tolist()
-            top3_p   = top3.values.cpu().tolist()
+        with torch.no_grad():
+            for start in range(0, len(X_t), CHUNK):
+                X_b     = X_t[start : start + CHUNK]
+                logits, reg_logits = model(X_b)
 
-            reg_probs    = F.softmax(reg_logits, dim=-1)
-            pred_log_days = (reg_probs * bin_centers_t.unsqueeze(0)).sum(-1)
-            pred_days     = torch.expm1(pred_log_days).cpu().tolist()
+                probs    = F.softmax(logits, dim=-1)
+                top3     = probs.topk(min(3, probs.size(1)), dim=1)
+                top3_cls = top3.indices.cpu().tolist()
+                top3_p   = top3.values.cpu().tolist()
 
-            all_top3_clusters.extend(top3_cls)
-            all_top3_probs.extend(top3_p)
-            all_days.extend(pred_days)
+                reg_probs    = F.softmax(reg_logits, dim=-1)
+                pred_log_days = (reg_probs * bin_centers_t.unsqueeze(0)).sum(-1)
+                pred_days     = torch.expm1(pred_log_days).cpu().tolist()
 
-    for i, raw_line in enumerate(record_lines):
-        rec = json.loads(raw_line)
-        top3 = all_top3_clusters[i]
-        # Pad to 3 if n_classes < 3
-        while len(top3) < 3:
-            top3 = top3 + [top3[-1]]
-        top3p = all_top3_probs[i]
-        while len(top3p) < 3:
-            top3p = top3p + [0.0]
-        results.append({
-            "patient_id":      str(rec["patient_id"]),
-            "top_3_clusters":  top3[:3],
-            "top_3_probs":     [round(p, 6) for p in top3p[:3]],
-            "days_until_next": round(float(max(0.0, all_days[i])), 2),
-        })
+                all_top3_clusters.extend(top3_cls)
+                all_top3_probs.extend(top3_p)
+                all_days.extend(pred_days)
+
+        for i, raw_line in enumerate(record_lines):
+            rec = json.loads(raw_line)
+            top3 = all_top3_clusters[i]
+            # Pad to 3 if n_classes < 3
+            while len(top3) < 3:
+                top3 = top3 + [top3[-1]]
+            top3p = all_top3_probs[i]
+            while len(top3p) < 3:
+                top3p = top3p + [0.0]
+            results.append({
+                "patient_id":      str(rec["patient_id"]),
+                "top_3_clusters":  top3[:3],
+                "top_3_probs":     [round(p, 6) for p in top3p[:3]],
+                "days_until_next": round(float(max(0.0, all_days[i])), 2),
+            })
+
+    else:
+        # binary / multiclass: return probabilities per patient
+        all_probs: list = []
+
+        with torch.no_grad():
+            for start in range(0, len(X_t), CHUNK):
+                X_b    = X_t[start : start + CHUNK]
+                logits = model(X_b)
+                if task == "binary":
+                    probs_b = torch.sigmoid(logits.squeeze(1)).cpu().tolist()   # list of float
+                    all_probs.extend(probs_b)
+                else:
+                    probs_b = F.softmax(logits, dim=-1).cpu().tolist()           # list of list
+                    all_probs.extend(probs_b)
+
+        for i, raw_line in enumerate(record_lines):
+            rec = json.loads(raw_line)
+            results.append({
+                "patient_id":   str(rec["patient_id"]),
+                "probabilities": round(float(all_probs[i]), 6) if task == "binary"
+                                 else [round(float(p), 6) for p in all_probs[i]],
+            })
 
     log.info("Inference complete: %d predictions", len(results))
     return results
+
+
+def predict_from_features(
+    classifier: dict[str, Any],
+    X: "np.ndarray",
+) -> "np.ndarray":
+    """
+    Run inference with a classifier trained via cadence.train_classifier().
+
+    Args:
+        classifier:   Dict returned by cadence.train_classifier().
+        X:            (N, D) numpy array of features (same dimensionality as training).
+
+    Returns:
+        For task="binary":     (N,) numpy array of probabilities in [0, 1].
+        For task="multiclass": (N, K) numpy array of class probabilities.
+    """
+    import torch
+    import torch.nn.functional as F
+    import numpy as np
+
+    task = classifier.get("task", "binary")
+    model = classifier.get("model")
+
+    if model is None:
+        raise ValueError(
+            "classifier dict has no 'model' key. Use the dict returned by "
+            "cadence.train_classifier(), not cadence.train()."
+        )
+
+    device = next(model.parameters()).device
+    X_t = torch.from_numpy(np.asarray(X, dtype=np.float32)).to(device)
+
+    model.eval()
+    all_out = []
+    CHUNK = 512
+    with torch.no_grad():
+        for start in range(0, len(X_t), CHUNK):
+            X_b = X_t[start : start + CHUNK]
+            logits = model(X_b)
+            if task == "binary":
+                probs = torch.sigmoid(logits.squeeze(1))  # (B,)
+            else:
+                probs = F.softmax(logits, dim=-1)          # (B, K)
+            all_out.append(probs.cpu())
+
+    result = torch.cat(all_out, dim=0).numpy()
+    log.info("predict_from_features: %d samples, task=%s", len(result), task)
+    return result

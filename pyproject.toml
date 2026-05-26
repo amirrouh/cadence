@@ -1,6 +1,6 @@
 [project]
 name = "cadence-core"
-version = "1.1.1"
+version = "1.2.0"
 description = "Neural model for next clinical event prediction from EHR sequences using the Narrative Velocity framework"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,4 +51,8 @@ where = ["src"]
 include = ["cadence*"]
 
 [tool.setuptools.package-data]
-cadence = ["tests/toy_data/*.jsonl", "tests/toy_data/*.npy", "tests/toy_data/*.json"]
+cadence = [
+    "tests/toy_data/*.jsonl", "tests/toy_data/*.npy", "tests/toy_data/*.json",
+    "tests/toy_data_binary/*.jsonl", "tests/toy_data_binary/*.npy", "tests/toy_data_binary/*.json",
+    "tests/toy_data_multiclass/*.jsonl", "tests/toy_data_multiclass/*.npy", "tests/toy_data_multiclass/*.json",
+]
