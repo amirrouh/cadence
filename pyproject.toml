@@ -1,6 +1,6 @@
 [project]
 name = "cadence-core"
-version = "1.2.0"
+version = "1.2.1"
 description = "Neural model for next clinical event prediction from EHR sequences using the Narrative Velocity framework"
 readme = "README.md"
 requires-python = ">=3.11"

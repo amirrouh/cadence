@@ -220,8 +220,38 @@ def test_smoke_train_classifier() -> None:
     print(f"  probs[:3]={probs[:3]}")
 
 
+def test_smoke_train_classifier_regularized() -> None:
+    import cadence
+
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((100, 16)).astype("float32")
+    y = (X[:, 0] + 0.5 * rng.standard_normal(100) > 0).astype("int64")
+    X_val = rng.standard_normal((30, 16)).astype("float32")
+    y_val = (X_val[:, 0] + 0.5 * rng.standard_normal(30) > 0).astype("int64")
+    clf = cadence.train_classifier(
+        X, y, X_val=X_val, y_val=y_val,
+        task="binary",
+        n_epochs=50,
+        early_stopping_patience=5,
+        early_stopping_metric="val_auroc",
+        class_weight="balanced",
+        weight_decay=1e-3,
+    )
+    assert clf["task"] == "binary"
+    assert clf.get("stopped_early") in (True, False)
+    assert clf.get("best_epoch") is not None
+    assert clf.get("class_weight_applied") is not None
+    probs = cadence.predict_from_features(clf, X_val)
+    assert probs.shape == (30,) or len(probs) == 30
+
+    print("cadence train_classifier_regularized smoke test PASS")
+    print(f"  stopped_early={clf['stopped_early']}  best_epoch={clf['best_epoch']}")
+    print(f"  class_weight_applied={clf['class_weight_applied']}")
+
+
 if __name__ == "__main__":
     test_smoke()
     test_smoke_binary()
     test_smoke_multiclass()
     test_smoke_train_classifier()
+    test_smoke_train_classifier_regularized()

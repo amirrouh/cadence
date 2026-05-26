@@ -26,6 +26,7 @@ embeddings.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -36,6 +37,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sklearn.metrics import roc_auc_score
 from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -106,18 +108,66 @@ def _evaluate_clf(
 
     logits = torch.cat(all_logits)
     labels = torch.cat(all_labels)
+    labels_np = labels.numpy()
 
     if task == "binary":
         probs = torch.sigmoid(logits.squeeze(1))
         preds = (probs >= 0.5).long()
         acc = (preds == labels).float().mean().item()
-        return {"accuracy": acc}
+        probs_np = probs.numpy()
+        try:
+            auroc = float(roc_auc_score(labels_np, probs_np))
+        except Exception:
+            auroc = float("nan")
+        return {"accuracy": acc, "val_auroc": auroc}
     else:
         preds = logits.argmax(dim=1)
         acc = (preds == labels).float().mean().item()
         top3 = logits.topk(min(3, logits.size(1)), dim=1).indices
         top3_acc = (top3 == labels.unsqueeze(1)).any(dim=1).float().mean().item()
-        return {"accuracy": acc, "top3_acc": top3_acc}
+        probs_np = torch.softmax(logits, dim=1).numpy()
+        n_classes = probs_np.shape[1]
+        try:
+            if n_classes == 2:
+                auroc = float(roc_auc_score(labels_np, probs_np[:, 1]))
+            else:
+                auroc = float(roc_auc_score(labels_np, probs_np, multi_class="ovr", average="macro"))
+        except Exception:
+            auroc = float("nan")
+        return {"accuracy": acc, "top3_acc": top3_acc, "val_auroc": auroc}
+
+
+def _build_class_weight_tensor(
+    class_weight: "str | dict | None",
+    y_train: np.ndarray,
+    n_classes: int,
+    task: str,
+) -> "tuple[torch.Tensor | None, list | None]":
+    """
+    Build a per-class weight tensor from the class_weight specification.
+
+    Returns (tensor_or_None, serializable_list_or_None).
+    """
+    if class_weight is None:
+        return None, None
+
+    n_total = len(y_train)
+    counts = np.bincount(y_train, minlength=n_classes).astype(np.float64)
+    counts = np.maximum(counts, 1)  # avoid zero-division for unseen classes
+
+    if class_weight == "balanced":
+        weights = n_total / (n_classes * counts)
+    elif isinstance(class_weight, dict):
+        weights = np.ones(n_classes, dtype=np.float64)
+        for k, v in class_weight.items():
+            weights[int(k)] = float(v)
+    else:
+        raise ValueError(
+            f"class_weight must be None, 'balanced', or a dict; got {class_weight!r}"
+        )
+
+    tensor = torch.tensor(weights, dtype=torch.float32)
+    return tensor, weights.tolist()
 
 
 def _run_clf_loop(
@@ -129,22 +179,42 @@ def _run_clf_loop(
     total_epochs: int,
     lr: float,
     out_dir: Path | None,
-) -> tuple[float, dict[str, float]]:
+    *,
+    weight_decay: float = WEIGHT_DECAY,
+    class_weight_tensor: torch.Tensor | None = None,
+    early_stopping_patience: int | None = None,
+    early_stopping_metric: str = "val_auroc",
+) -> tuple[float, dict[str, float], int, bool]:
     """
     Simple supervised training loop for binary/multiclass tasks.
-    Returns (best_val_accuracy, best_val_metrics).
+
+    Returns (best_val_metric, best_val_metrics_dict, best_epoch, stopped_early).
     """
     if task == "binary":
-        loss_fn: nn.Module = nn.BCEWithLogitsLoss()
+        if class_weight_tensor is not None:
+            # pos_weight for BCEWithLogitsLoss: scalar = w_1 / w_0
+            pos_w = class_weight_tensor[1] / class_weight_tensor[0]
+            loss_fn: nn.Module = nn.BCEWithLogitsLoss(
+                pos_weight=pos_w.to(device)
+            )
+        else:
+            loss_fn = nn.BCEWithLogitsLoss()
     else:
-        loss_fn = nn.CrossEntropyLoss()
+        if class_weight_tensor is not None:
+            loss_fn = nn.CrossEntropyLoss(weight=class_weight_tensor.to(device))
+        else:
+            loss_fn = nn.CrossEntropyLoss()
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=lr * 0.1)
 
-    best_val_acc = 0.0
+    best_val_metric = -float("inf")
     best_val_m: dict[str, float] = {}
+    best_epoch = 1
+    patience_cnt = 0
+    stopped_early = False
     best_ckpt = (out_dir / "best_model.pt") if out_dir is not None else None
+    best_state: dict | None = None
 
     for epoch in range(1, total_epochs + 1):
         model.train()
@@ -170,18 +240,50 @@ def _run_clf_loop(
         scheduler.step()
         val_m = _evaluate_clf(model, val_loader, device, task)
         elapsed = time.time() - t0
+
+        # Compute the tracked metric
+        if early_stopping_metric == "val_loss":
+            # We don't track val_loss separately; approximate with -accuracy
+            tracked = -float("inf")  # not meaningful, fall back to auroc
+            log.warning("val_loss early stopping not directly tracked; using val_auroc instead.")
+            tracked = val_m.get("val_auroc", val_m["accuracy"])
+        else:
+            tracked = val_m.get("val_auroc", val_m["accuracy"])
+
         log.info(
-            "Epoch %2d/%d  loss=%.4f  val_acc=%.4f  [%.1fs]",
-            epoch, total_epochs, total_loss / max(1, n_batches), val_m["accuracy"], elapsed,
+            "Epoch %2d/%d  loss=%.4f  val_acc=%.4f  val_auroc=%.4f  [%.1fs]",
+            epoch, total_epochs,
+            total_loss / max(1, n_batches),
+            val_m["accuracy"],
+            val_m.get("val_auroc", float("nan")),
+            elapsed,
         )
 
-        if val_m["accuracy"] > best_val_acc:
-            best_val_acc = val_m["accuracy"]
+        improved = tracked > best_val_metric + 1e-4
+        if improved:
+            best_val_metric = tracked
             best_val_m = val_m
+            best_epoch = epoch
+            patience_cnt = 0
             if best_ckpt is not None:
                 torch.save(model.state_dict(), best_ckpt)
+            best_state = copy.deepcopy(model.state_dict())
+        else:
+            patience_cnt += 1
 
-    return best_val_acc, best_val_m
+        if early_stopping_patience is not None and patience_cnt >= early_stopping_patience:
+            log.info(
+                "Early stopping at epoch %d (patience=%d, best_epoch=%d, best_metric=%.4f)",
+                epoch, early_stopping_patience, best_epoch, best_val_metric,
+            )
+            stopped_early = True
+            break
+
+    # Restore best weights
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return best_val_metric, best_val_m, best_epoch, stopped_early
 
 
 def train(
@@ -201,6 +303,10 @@ def train(
     task: str = "next_event",
     label_field: str | None = None,
     n_classes: int | None = None,
+    early_stopping_patience: int | None = None,
+    early_stopping_metric: str = "val_auroc",
+    class_weight: "str | dict | None" = None,
+    weight_decay: float = WEIGHT_DECAY,
 ) -> dict[str, Any]:
     """
     Train a Cadence NVCClean model on user-supplied data.
@@ -258,6 +364,23 @@ def train(
                           binary and multiclass tasks.
         n_classes:        Number of classes. Required for multiclass; binary
                           always uses 1 output logit.
+        early_stopping_patience:
+                          For binary/multiclass only. Stop training after this
+                          many epochs without improvement (>0.0001) in the
+                          tracked metric. None = run all n_epochs (default).
+                          Ignored for task='next_event'.
+        early_stopping_metric:
+                          For binary/multiclass only. "val_auroc" (default) or
+                          "val_loss". Ignored for task='next_event'.
+        class_weight:     For binary/multiclass only. None = no weighting
+                          (default). "balanced" = auto inverse-frequency weights
+                          (sklearn convention: n / (n_classes * bincount)).
+                          dict {class_idx: weight} = manual weights.
+                          Applied as pos_weight to BCEWithLogitsLoss (binary)
+                          or weight to CrossEntropyLoss (multiclass).
+                          Ignored for task='next_event'.
+        weight_decay:     AdamW weight decay. Default 1e-4. Applies to all
+                          tasks.
 
     Returns:
         Classifier dict with keys:
@@ -436,6 +559,11 @@ def train(
         train_loader_clf = DataLoader(train_ds_clf, batch_size=batch_size_clf, shuffle=True,  num_workers=0)
         val_loader_clf   = DataLoader(val_ds_clf,   batch_size=batch_size_clf, shuffle=False, num_workers=0)
 
+        # Build class weight tensor
+        cw_tensor, cw_applied = _build_class_weight_tensor(
+            class_weight, y_cls_train, n_clf_classes, task
+        )
+
         clf_n_classes = 1 if task == "binary" else n_clf_classes
         model = NVCClean(
             n_features=actual_n_features,
@@ -449,12 +577,16 @@ def train(
         clf_epochs = n_epochs if n_epochs is not None else (PHASE1_EPOCHS + PHASE2_EPOCHS)
         best_ckpt = out_dir / "best_model.pt"
 
-        _, best_val_m = _run_clf_loop(
+        _, best_val_m, best_epoch_clf, stopped_early_clf = _run_clf_loop(
             model, train_loader_clf, val_loader_clf, device, task,
             clf_epochs, clf_lr, out_dir,
+            weight_decay=weight_decay,
+            class_weight_tensor=cw_tensor,
+            early_stopping_patience=early_stopping_patience,
+            early_stopping_metric=early_stopping_metric,
         )
 
-        # Reload best checkpoint
+        # best weights already restored in _run_clf_loop; reload from disk if ckpt exists
         if best_ckpt.exists():
             model.load_state_dict(torch.load(best_ckpt, map_location=device, weights_only=True))
         val_m_final = _evaluate_clf(model, val_loader_clf, device, task)
@@ -469,15 +601,19 @@ def train(
             log.info("Test metrics: %s", test_m_final)
 
         metadata = {
-            "n_features":  actual_n_features,
-            "n_clusters":  n_clusters,
-            "n_classes":   n_clf_classes,
-            "task":        task,
-            "label_field": label_field,
-            "emb_dim":     emb_dim,
-            "max_history": max_history,
-            "n_epochs":    clf_epochs,
-            "seed":        seed,
+            "n_features":           actual_n_features,
+            "n_clusters":           n_clusters,
+            "n_classes":            n_clf_classes,
+            "task":                 task,
+            "label_field":          label_field,
+            "emb_dim":              emb_dim,
+            "max_history":          max_history,
+            "n_epochs":             clf_epochs,
+            "seed":                 seed,
+            "best_epoch":           best_epoch_clf,
+            "best_val_metric":      best_val_m.get("val_auroc", best_val_m.get("accuracy")),
+            "stopped_early":        stopped_early_clf,
+            "class_weight_applied": cw_applied,
         }
         with open(out_dir / "metadata.json", "w", encoding="utf-8") as fp:
             json.dump(metadata, fp, indent=2)
@@ -486,21 +622,25 @@ def train(
                 json.dump(test_m_final, fp, indent=2)
 
         result: dict[str, Any] = {
-            "model_path":   str(best_ckpt),
-            "swa_path":     None,
-            "out_dir":      str(out_dir),
-            "n_features":   actual_n_features,
-            "n_clusters":   n_clusters,
-            "n_classes":    n_clf_classes,
-            "task":         task,
-            "label_field":  label_field,
-            "bin_edges":    [],
-            "bin_centers":  [],
-            "feat_mean":    feat_mean.squeeze().tolist(),
-            "feat_std":     feat_std.squeeze().tolist(),
-            "val_metrics":  val_m_final,
-            "test_metrics": test_m_final,
-            "metadata":     metadata,
+            "model_path":           str(best_ckpt),
+            "swa_path":             None,
+            "out_dir":              str(out_dir),
+            "n_features":           actual_n_features,
+            "n_clusters":           n_clusters,
+            "n_classes":            n_clf_classes,
+            "task":                 task,
+            "label_field":          label_field,
+            "bin_edges":            [],
+            "bin_centers":          [],
+            "feat_mean":            feat_mean.squeeze().tolist(),
+            "feat_std":             feat_std.squeeze().tolist(),
+            "val_metrics":          val_m_final,
+            "test_metrics":         test_m_final,
+            "metadata":             metadata,
+            "best_epoch":           best_epoch_clf,
+            "best_val_metric":      best_val_m.get("val_auroc", best_val_m.get("accuracy")),
+            "stopped_early":        stopped_early_clf,
+            "class_weight_applied": cw_applied,
         }
         log.info("Training complete (task=%s). Outputs written to: %s", task, out_dir)
         return result
@@ -555,7 +695,7 @@ def train(
     # -------------------------------------------------------------------------
     # Phase 1: Classification only (epochs 1-p1_epochs)
     # -------------------------------------------------------------------------
-    optimizer = torch.optim.AdamW(model.parameters(), lr=PHASE1_LR, weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=PHASE1_LR, weight_decay=weight_decay)
     steps_per_epoch    = max(1, len(train_loader))
     phase1_total_steps = steps_per_epoch * p1_epochs
     scheduler = WarmupCosineScheduler(
@@ -644,7 +784,7 @@ def train(
         log.info("Phase 2: cls + reg + SWA (epochs %d-%d)", p1_epochs + 1, total_epochs)
         log.info("=" * 60)
 
-        optimizer2 = torch.optim.AdamW(model.parameters(), lr=PHASE2_LR, weight_decay=WEIGHT_DECAY)
+        optimizer2 = torch.optim.AdamW(model.parameters(), lr=PHASE2_LR, weight_decay=weight_decay)
         scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer2, T_max=p2_epochs, eta_min=PHASE2_LR * 0.1
         )
@@ -837,6 +977,10 @@ def train_classifier(
     batch_size: int = 256,
     seed: int = 42,
     device_str: str | None = None,
+    early_stopping_patience: int | None = None,
+    early_stopping_metric: str = "val_auroc",
+    class_weight: "str | dict | None" = None,
+    weight_decay: float = WEIGHT_DECAY,
 ) -> dict[str, Any]:
     """
     Train NVCClean as a tabular classifier on pre-built feature matrices.
@@ -859,11 +1003,23 @@ def train_classifier(
         batch_size:   Mini-batch size (default 256).
         seed:         Random seed (default 42).
         device_str:   Device string. Auto-detected if None.
+        early_stopping_patience:
+                      Stop after this many epochs without improvement (>0.0001)
+                      in early_stopping_metric. None = run all n_epochs (default).
+        early_stopping_metric:
+                      "val_auroc" (default) or "val_loss". Requires X_val/y_val.
+        class_weight: None = no weighting (default). "balanced" = auto inverse-
+                      frequency weights (n / (n_classes * bincount), sklearn
+                      convention). dict {class_idx: weight} = manual per-class
+                      weights. Applied as pos_weight to BCEWithLogitsLoss (binary)
+                      or weight to CrossEntropyLoss (multiclass).
+        weight_decay: AdamW weight decay. Default 1e-4.
 
     Returns:
         Classifier dict compatible with cadence.predict_from_features().
         Keys: "model", "task", "n_features", "n_classes", "model_path",
-              "out_dir", "val_metrics".
+              "out_dir", "val_metrics", "best_epoch", "best_val_metric",
+              "stopped_early", "class_weight_applied".
     """
     if task not in ("binary", "multiclass"):
         raise ValueError(f"task must be 'binary' or 'multiclass'; got {task!r}")
@@ -887,6 +1043,11 @@ def train_classifier(
     n_feat = X_train.shape[1]
     clf_n_classes = 1 if task == "binary" else int(n_classes)  # type: ignore[arg-type]
     actual_n_classes = 2 if task == "binary" else int(n_classes)  # type: ignore[arg-type]
+
+    # Build class weight tensor
+    cw_tensor, cw_applied = _build_class_weight_tensor(
+        class_weight, y_train, actual_n_classes, task
+    )
 
     model = NVCClean(
         n_features=n_feat,
@@ -913,12 +1074,16 @@ def train_classifier(
     if val_loader_clf is None:
         val_loader_clf = train_loader
 
-    best_val_acc, best_val_m = _run_clf_loop(
+    _, best_val_m, best_epoch, stopped_early = _run_clf_loop(
         model, train_loader, val_loader_clf, device, task,
         n_epochs, lr, out_path,
+        weight_decay=weight_decay,
+        class_weight_tensor=cw_tensor,
+        early_stopping_patience=early_stopping_patience,
+        early_stopping_metric=early_stopping_metric,
     )
 
-    # Reload best checkpoint if saved
+    # best weights already restored in _run_clf_loop; reload from disk if ckpt exists
     model_path_str = None
     if out_path is not None:
         best_ckpt = out_path / "best_model.pt"
@@ -928,12 +1093,16 @@ def train_classifier(
 
     model.eval()
     result: dict[str, Any] = {
-        "model":        model,
-        "task":         task,
-        "n_features":   n_feat,
-        "n_classes":    actual_n_classes,
-        "model_path":   model_path_str,
-        "out_dir":      str(out_path) if out_path is not None else None,
-        "val_metrics":  best_val_m,
+        "model":                model,
+        "task":                 task,
+        "n_features":           n_feat,
+        "n_classes":            actual_n_classes,
+        "model_path":           model_path_str,
+        "out_dir":              str(out_path) if out_path is not None else None,
+        "val_metrics":          best_val_m,
+        "best_epoch":           best_epoch,
+        "best_val_metric":      best_val_m.get("val_auroc", best_val_m.get("accuracy")),
+        "stopped_early":        stopped_early,
+        "class_weight_applied": cw_applied,
     }
     return result

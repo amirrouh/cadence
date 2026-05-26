@@ -311,6 +311,51 @@ probs = cadence.predict_from_features(classifier, X_test)
 # probs: (N,) array of probabilities for binary; (N, K) for multiclass
 ```
 
+#### Recommended for small datasets (n < 5000)
+
+On small datasets NVCClean can overfit quickly. Use early stopping, class
+weighting, and stronger L2 regularization to stabilize training:
+
+```python
+classifier = cadence.train_classifier(
+    X_train, y_train,
+    X_val=X_val, y_val=y_val,
+    task="binary",
+    n_epochs=200,
+    hidden_dims=(128, 64),         # smaller model for small n
+    early_stopping_patience=10,    # halt when val plateaus
+    early_stopping_metric="val_auroc",
+    class_weight="balanced",       # imbalanced clinical labels
+    weight_decay=1e-3,             # stronger L2 vs default 1e-4
+    lr=1e-3,
+)
+probs = cadence.predict_from_features(classifier, X_test)
+```
+
+The same kwargs are available on `cadence.train()` for `task="binary"` or
+`task="multiclass"` (JSONL path):
+
+```python
+classifier = cadence.train(
+    train_jsonl="train.jsonl",
+    val_jsonl="val.jsonl",
+    embeddings_path="embeddings.npy",
+    event_index_path="event_index.json",
+    n_clusters=50,
+    out_dir="./runs/binary_run",
+    task="binary",
+    label_field="readmitted_30d",
+    n_epochs=200,
+    early_stopping_patience=10,
+    early_stopping_metric="val_auroc",
+    class_weight="balanced",
+    weight_decay=1e-3,
+)
+```
+
+For `task="next_event"`, these kwargs are accepted but ignored (the next-event
+head uses its own two-phase training schedule with fixed hyperparameters).
+
 ---
 
 ## Reproducibility

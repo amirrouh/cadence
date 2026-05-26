@@ -13,7 +13,7 @@ Public training API (v1.2.0): supply your own JSONL data and per-event embedding
 or use train_classifier() with pre-built feature matrices and arbitrary labels.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 from cadence.model import NVCClean, main
 from cadence.features import build_feature_matrix, build_population_prior
