@@ -105,18 +105,14 @@ from torch.utils.data import DataLoader, TensorDataset
 # _PROJECT_DIR → <repo>/clinical-record-prediction/  (data, results, sibling src/ live here)
 _SCRIPT_DIR  = Path(__file__).resolve().parent
 _PROJECT_DIR = _SCRIPT_DIR.parents[1] / "clinical-record-prediction"
-sys.path.insert(0, str(_PROJECT_DIR / "src"))
 
-from preflight_check import preflight
-# NOTE: We import ONLY feature-engineering utilities from mimic_train_xgb_sex.
-# The XGBoost *model* is never loaded — only build_population_prior, load_embeddings,
-# build_feature_matrix (which compute hand-crafted statistics), and LOG_DAYS_CLIP.
-from mimic_train_xgb_sex import (
-    build_population_prior,
-    load_embeddings,
-    build_feature_matrix,
-    LOG_DAYS_CLIP,
-)
+# NOTE: preflight_check and mimic_train_xgb_sex live in the PRIVATE training repo.
+# They are imported lazily inside main() so that PyPI users can do
+# `import cadence` without the private repo being present.
+
+# Clip value for log1p(days); matches LOG_DAYS_CLIP in mimic_train_xgb_sex.py (12.0).
+# Defined here so evaluate() works without the private repo on the path.
+LOG_DAYS_CLIP: float = 12.0
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 STRUCT_FEAT_DIM   = 150
@@ -961,6 +957,27 @@ def main() -> None:
     Returns:
       None (outputs written to disk)
     """
+    # ── Private-repo imports (lazy; not available in PyPI installs) ──────────────
+    try:
+        sys.path.insert(0, str(_PROJECT_DIR / "src"))
+        from preflight_check import preflight
+        # NOTE: We import ONLY feature-engineering utilities from mimic_train_xgb_sex.
+        # The XGBoost *model* is never loaded -- only build_population_prior,
+        # load_embeddings, build_feature_matrix, and LOG_DAYS_CLIP.
+        from mimic_train_xgb_sex import (
+            build_population_prior,
+            load_embeddings,
+            build_feature_matrix,
+            LOG_DAYS_CLIP,
+        )
+    except ImportError as _e:
+        raise RuntimeError(
+            "cadence.main() requires the private clinical-record-prediction "
+            "training environment, which is not included in the PyPI package. "
+            "Public users should construct NVCClean directly and load a "
+            "checkpoint via load_checkpoint(). See README for usage."
+        ) from _e
+
     preflight()
 
     args        = _parse_args()
