@@ -35,7 +35,7 @@ Embeddings file (embeddings_path):
   A NumPy .npy file of shape (N_events, emb_dim) where emb_dim is the
   dimensionality of your per-event embeddings (e.g. 768 for PubMedBERT).
   Any embedding model works -- BERT, PubMedBERT, domain-specific, etc.
-  The emb_dim must be consistent with the n_features passed to NVCClean.
+  The emb_dim must be consistent with the n_features passed to Cadence.
 
 Event index file (event_index_path):
   A JSON file: a list of objects, each with:

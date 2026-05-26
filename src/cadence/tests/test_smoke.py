@@ -26,7 +26,7 @@ def test_smoke() -> None:
     assert hasattr(cadence, "__version__"), "cadence.__version__ missing"
     assert hasattr(cadence, "train"),       "cadence.train missing"
     assert hasattr(cadence, "predict"),     "cadence.predict missing"
-    assert hasattr(cadence, "NVCClean"),    "cadence.NVCClean missing"
+    assert hasattr(cadence, "Cadence"),      "cadence.Cadence missing"
 
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = Path(tmp) / "smoke_run"

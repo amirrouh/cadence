@@ -1,5 +1,5 @@
 """
-cadence/inference.py -- Inference API for NVCClean.
+cadence/inference.py -- Inference API for Cadence.
 
 Public users call cadence.predict() to run inference on a trained checkpoint
 (from cadence.train()).
@@ -32,7 +32,7 @@ def predict(
     use_swa: bool = False,
 ) -> list[dict[str, Any]]:
     """
-    Run inference with a trained Cadence NVCClean classifier.
+    Run inference with a trained Cadence classifier.
 
     Args:
         classifier:       Either the dict returned by cadence.train(), or a path
@@ -64,7 +64,7 @@ def predict(
         FileNotFoundError: If any required path does not exist.
         ValueError: On incompatible metadata / missing required arguments.
     """
-    from .model import NVCClean
+    from .model import Cadence
 
     # -------------------------------------------------------------------------
     # Resolve classifier metadata
@@ -153,7 +153,7 @@ def predict(
     # Load model
     # -------------------------------------------------------------------------
     if task == "next_event":
-        model = NVCClean(
+        model = Cadence(
             n_features=n_features,
             n_classes=n_classes,
             bin_edges_np=bin_edges_np,
@@ -161,9 +161,9 @@ def predict(
             task="next_event",
         ).to(device)
     else:
-        # binary: n_classes stored in dict is 2, but NVCClean uses cls_out=1
+        # binary: n_classes stored in dict is 2, but Cadence uses cls_out=1
         clf_out = 1 if task == "binary" else n_classes
-        model = NVCClean(
+        model = Cadence(
             n_features=n_features,
             n_classes=clf_out,
             task=task,

@@ -236,14 +236,14 @@ The public training path uses `5*n_clusters + max_history + 20 + 2*emb_dim` inpu
 features. For `n_clusters=50`, `max_history=10`, `emb_dim=768`: 1806 dims. The paper
 checkpoint uses 2420 dims (884 base + 768 + 768); the extra 614 base dims require
 MIMIC-specific structured/temporal preprocessing pipelines not available publicly.
-The public model uses the same NVCClean architecture and training schedule (Phase 1
+The public model uses the same Cadence architecture and training schedule (Phase 1
 classification + Phase 2 joint cls+reg + SWA + MixUp + ASL + Gaussian soft targets).
 
 ---
 
 ## Train on Custom Labels (Binary / Multiclass)
 
-Starting with v1.2.0, `cadence.train()` accepts `task="binary"` or `task="multiclass"` so you can train NVCClean on arbitrary labels instead of next-event prediction. Add a `label_field` key to your target objects and pass it along:
+Starting with v1.2.0, `cadence.train()` accepts `task="binary"` or `task="multiclass"` so you can train Cadence on arbitrary labels instead of next-event prediction. Add a `label_field` key to your target objects and pass it along:
 
 ```python
 import cadence
@@ -313,7 +313,7 @@ probs = cadence.predict_from_features(classifier, X_test)
 
 #### Recommended for small datasets (n < 5000)
 
-On small datasets NVCClean can overfit quickly. Use early stopping, class
+On small datasets Cadence can overfit quickly. Use early stopping, class
 weighting, and stronger L2 regularization to stabilize training:
 
 ```python

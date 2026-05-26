@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cadence/model.py — Published paper model (NVCClean champion)
+cadence/model.py — Published paper model (Cadence champion)
 =====================================================================
 This is the production-promoted version of the Cadence champion model:
   nvc_emb_mean_last_selfkd_v2_swa30_100k_01
@@ -10,7 +10,7 @@ Performance (100k cohort, male, 3-seed average):
   - MAE: 36.95 days
   Beats XGBoost (27.17% top-1 / 50.9d MAE) on both metrics.
 
-Architecture — NVCClean 3-block residual MLP (~5.86M parameters):
+Architecture — Cadence 3-block residual MLP (~5.86M parameters):
   - Input: 2420-dim (768 emb-mean + 768 emb-last + 884 hand-crafted features)
   - 3-block residual MLP: 2420→1024→1024→512
   - fm_linear: Linear(2420, 512, bias=False) — linear shortcut (regression path only)
@@ -512,10 +512,10 @@ class WarmupCosineScheduler:
 class NVCCleanTeacher(nn.Module):
     """
     Teacher-only class: MLP backbone + fm_linear key for strict checkpoint compatibility.
-    Has fm_linear to match NVCClean checkpoint state_dict keys (teacher is the 2420-dim
+    Has fm_linear to match Cadence checkpoint state_dict keys (teacher is the 2420-dim
     nvc_emb_mean_last_selfkd_100k_01 best_model.pt which has fm_linear). fm_linear is
     loaded but NOT used in forward — teacher inference uses pure MLP path only.
-    Used only for self-KD; student uses NVCClean. n_features=2420 (same dim as student).
+    Used only for self-KD; student uses Cadence. n_features=2420 (same dim as student).
     """
 
     def __init__(
@@ -558,7 +558,7 @@ class NVCCleanTeacher(nn.Module):
         self.res_proj = nn.Linear(1024, 512, bias=False)
         self.cls_head = nn.Linear(512, n_classes)
         self.reg_head = nn.Linear(512, n_bins)
-        # fm_linear is present to match NVCClean checkpoint state_dict keys (strict=True compat).
+        # fm_linear is present to match Cadence checkpoint state_dict keys (strict=True compat).
         # It is loaded from checkpoint but NOT used in forward — pure MLP path only for teacher.
         self.fm_linear = nn.Linear(n_features, 512, bias=False)
 
@@ -573,9 +573,9 @@ class NVCCleanTeacher(nn.Module):
         return logits, reg_logits
 
 
-class NVCClean(nn.Module):
+class Cadence(nn.Module):
     """
-    NVC-Clean v15 + reg-only linear shortcut: 3-block residual MLP with a raw-feature
+    Cadence v15 + reg-only linear shortcut: 3-block residual MLP with a raw-feature
     linear shortcut injected ONLY into the regression head.
 
     Architecture:
@@ -676,13 +676,13 @@ class NVCClean(nn.Module):
         n_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         if task == "next_event":
             log.info(
-                "NVCClean-RegOnlyShortcut parameters: %d (%.1fK)  n_bins=%d  "
+                "Cadence-RegOnlyShortcut parameters: %d (%.1fK)  n_bins=%d  "
                 "fm_linear=%d (reg-only shortcut, cls path untouched)",
                 n_params, n_params / 1000, self.n_bins, self.fm_linear.weight.numel(),
             )
         else:
             log.info(
-                "NVCClean-%s parameters: %d (%.1fK)  cls_out=%d",
+                "Cadence-%s parameters: %d (%.1fK)  cls_out=%d",
                 task, n_params, n_params / 1000, cls_out,
             )
 
@@ -863,7 +863,7 @@ def evaluate(
 
     # Get bin_centers from model (works for both base and SWA model)
     if hasattr(model, "module"):
-        # AveragedModel wraps: model.module is the underlying NVCClean
+        # AveragedModel wraps: model.module is the underlying Cadence
         bin_centers = model.module.bin_centers.cpu()
     else:
         bin_centers = model.bin_centers.cpu()
@@ -962,7 +962,7 @@ def main() -> None:
 
     log.info("=" * 80)
     log.info(
-        "mimic_train_nvc_clean (NVCClean champion, 768-dim emb-mean + 768-dim emb-last | self-KD T=%.1f alpha=%.2f | "
+        "mimic_train_nvc_clean (Cadence champion, 768-dim emb-mean + 768-dim emb-last | self-KD T=%.1f alpha=%.2f | "
         "ASL gamma_neg=%.1f gamma_pos=%.1f, LAMBDA_AUX_MAX=%.2f ramp ep%d->%d, SWA_START=%d, 140 total epochs, input_dim=2420) "
         "— %s  seed=%d  data_suffix=%s",
         TEMPERATURE, KD_ALPHA, ASL_GAMMA_NEG, ASL_GAMMA_POS,
@@ -1108,7 +1108,7 @@ def main() -> None:
     test_loader  = DataLoader(test_ds,  batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    model = NVCClean(
+    model = Cadence(
         n_features=actual_n_features,
         n_classes=n_clf_classes,
         bin_edges_np=bin_edges_np,
@@ -1118,15 +1118,15 @@ def main() -> None:
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    log.info("NVCClean-EmbMeanLast total trainable parameters: %d (%.1fK)", n_params, n_params / 1000)
+    log.info("Cadence-EmbMeanLast total trainable parameters: %d (%.1fK)", n_params, n_params / 1000)
     log.info("KD ENABLED (KD_ALPHA=%.2f, T=%.1f) — self-KD from 2420-dim best_model.pt.", KD_ALPHA, TEMPERATURE)
     log.info("Input dim: %d (884 base + 768 emb-mean + 768 emb-last)", actual_n_features)
 
     # ── Teacher model (frozen) — self-KD from nvc_emb_mean_last_selfkd_100k_01 best_model.pt ──
     # Self-distillation from nvc_emb_mean_last_selfkd_100k_01 seed_42 best_model.pt (34.02% top-1).
     # ALLOWED per CLAUDE.md: NV-C -> NV-C self-KD is permitted.
-    # NOT XGBoost KD — teacher is our own trained NVCClean model.
-    # NVCCleanTeacher has fm_linear key to match the NVCClean checkpoint — strict=True works.
+    # NOT XGBoost KD — teacher is our own trained Cadence model.
+    # NVCCleanTeacher has fm_linear key to match the Cadence checkpoint — strict=True works.
     # fm_linear is loaded but not used in teacher forward (pure MLP path for inference).
     # best_model.pt is a regular checkpoint (NOT AveragedModel), so no "module." prefix expected.
     teacher_ckpt_path = Path(_PROJECT_DIR).parent / TEACHER_CKPT
@@ -1141,7 +1141,7 @@ def main() -> None:
         input_dropout=INPUT_DROPOUT,
     ).to(device)
     teacher_state = torch.load(teacher_ckpt_path, map_location=device, weights_only=False)
-    # best_model.pt is a regular NVCClean checkpoint — no "module." prefix (not AveragedModel).
+    # best_model.pt is a regular Cadence checkpoint — no "module." prefix (not AveragedModel).
     # However, handle both cases gracefully in case SWA checkpoint is accidentally pointed to.
     if isinstance(teacher_state, dict) and any(k.startswith("module.") for k in teacher_state):
         log.info("Stripping 'module.' prefix from teacher state_dict (AveragedModel checkpoint).")
@@ -1150,7 +1150,7 @@ def main() -> None:
     # Handle nested state_dict key
     if isinstance(teacher_state, dict) and "state_dict" in teacher_state:
         teacher_state = teacher_state["state_dict"]
-    # strict=True: NVCCleanTeacher has fm_linear, matching the NVCClean checkpoint keys exactly
+    # strict=True: NVCCleanTeacher has fm_linear, matching the Cadence checkpoint keys exactly
     teacher.load_state_dict(teacher_state, strict=True)
     log.info("Teacher state_dict loaded with strict=True (NVCCleanTeacher+fm_linear, n_features=%d).", actual_n_features)
     teacher.eval()
@@ -1584,7 +1584,7 @@ def main() -> None:
     # ── Save test_metrics.json ────────────────────────────────────────────────
     test_results = {
         "experiment":          "mimic_train_nvc_clean",
-        "model":               "NVCClean-EmbMeanLast-v1",
+        "model":               "Cadence-EmbMeanLast-v1",
         "architecture":        (
             f"Wider Deep Residual MLP (884->1024->512->256) — {n_bins_actual}-bin quantile-softmax reg head "
             f"(Gaussian-idx soft targets, sigma_idx={GAUSS_SIGMA_IDX:.2f}), "

@@ -1,5 +1,5 @@
 """
-cadence/train.py -- High-level training API for NVCClean.
+cadence/train.py -- High-level training API for Cadence.
 
 Public users call cadence.train() with their own JSONL data and embeddings,
 or cadence.train_classifier() with pre-built feature matrices.
@@ -18,7 +18,7 @@ The 150 structured and 464 temporal features are derived from MIMIC-IV-specific
 preprocessing pipelines and are not available for public datasets. Train your own
 model on your own data via cadence.train(); pretrained weights are not distributed.
 
-The public model is fully functional and uses the same NVCClean architecture,
+The public model is fully functional and uses the same Cadence architecture,
 training schedule (Phase 1 classification + Phase 2 cls+reg + SWA), MixUp,
 ASL loss, and Gaussian soft-target regression. It will produce meaningful
 results on any EHR-style sequence dataset with cluster IDs and per-event
@@ -44,7 +44,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .data import load_embeddings, validate_jsonl
 from .features import build_feature_matrix, build_population_prior
 from .model import (
-    NVCClean,
+    Cadence,
     WarmupCosineScheduler,
     asl_loss_hard,
     asl_loss_mixed,
@@ -94,7 +94,7 @@ def _evaluate_clf(
     device: torch.device,
     task: str,
 ) -> dict[str, float]:
-    """Evaluate a binary or multiclass NVCClean model."""
+    """Evaluate a binary or multiclass Cadence model."""
     model.eval()
     all_logits: list[torch.Tensor] = []
     all_labels: list[torch.Tensor] = []
@@ -309,7 +309,7 @@ def train(
     weight_decay: float = WEIGHT_DECAY,
 ) -> dict[str, Any]:
     """
-    Train a Cadence NVCClean model on user-supplied data.
+    Train a Cadence model on user-supplied data.
 
     The default task='next_event' reproduces the paper's setup exactly (joint
     classification + regression, MixUp, ASL loss, SWA). For arbitrary labels
@@ -565,7 +565,7 @@ def train(
         )
 
         clf_n_classes = 1 if task == "binary" else n_clf_classes
-        model = NVCClean(
+        model = Cadence(
             n_features=actual_n_features,
             n_classes=clf_n_classes,
             task=task,
@@ -678,7 +678,7 @@ def train(
         test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True)
 
     # Model
-    model = NVCClean(
+    model = Cadence(
         n_features=actual_n_features,
         n_classes=n_clf_classes,
         bin_edges_np=bin_edges_np,
@@ -983,7 +983,7 @@ def train_classifier(
     weight_decay: float = WEIGHT_DECAY,
 ) -> dict[str, Any]:
     """
-    Train NVCClean as a tabular classifier on pre-built feature matrices.
+    Train Cadence as a tabular classifier on pre-built feature matrices.
 
     For users who already have a feature matrix (computed however they like)
     and arbitrary labels. Skips JSONL parsing and feature building entirely.
@@ -998,7 +998,7 @@ def train_classifier(
         n_classes:    Number of classes. Required for multiclass; binary infers 2.
         n_epochs:     Number of training epochs (default 30).
         out_dir:      If set, saves best_model.pt checkpoint here.
-        hidden_dims:  Ignored (NVCClean architecture is fixed); kept for API symmetry.
+        hidden_dims:  Ignored (Cadence architecture is fixed); kept for API symmetry.
         lr:           Learning rate (default 1e-3).
         batch_size:   Mini-batch size (default 256).
         seed:         Random seed (default 42).
@@ -1049,7 +1049,7 @@ def train_classifier(
         class_weight, y_train, actual_n_classes, task
     )
 
-    model = NVCClean(
+    model = Cadence(
         n_features=n_feat,
         n_classes=clf_n_classes,
         task=task,

@@ -1,5 +1,5 @@
 """
-cadence/features.py -- Feature engineering for the Cadence NVCClean model.
+cadence/features.py -- Feature engineering for the Cadence model.
 
 All functions accept explicit path arguments; no hardcoded MIMIC paths exist here.
 Public users supply their own embeddings and JSONL data.
