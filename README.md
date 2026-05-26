@@ -143,6 +143,102 @@ If you use cadence-core in your research, please cite:
 
 ---
 
+## Train on Your Own Data
+
+Starting with v1.1.0, cadence-core ships a complete training pipeline. Provide your
+own JSONL sequences and per-event embeddings; no MIMIC data is required.
+
+### Input format
+
+Each line in your JSONL files is one patient prediction record:
+
+```json
+{
+  "patient_id": "patient_001",
+  "history": [
+    {
+      "date_iso": "2019-03-15",
+      "event_index": 42,
+      "cluster_id": 7,
+      "days_from_start": 0.0
+    },
+    {
+      "date_iso": "2019-04-01",
+      "event_index": 17,
+      "cluster_id": 3,
+      "days_from_start": 17.0
+    }
+  ],
+  "target": {
+    "cluster_id": 12,
+    "days_from_prev": 14.0
+  }
+}
+```
+
+- `event_index`: row index (0-based) into your `embeddings.npy` file.
+- `cluster_id`: integer in `[0, n_clusters-1]` representing the event category.
+- `days_from_start`: days since the first event in this patient's history window.
+- `days_from_prev`: regression target -- days between the last history event and the target event.
+
+### Embeddings
+
+Provide a NumPy array of shape `(N_events, emb_dim)` -- one row per unique event
+in your dataset. Any sentence embedding works: PubMedBERT, BERT, domain-specific
+encoders, etc. The `emb_dim` can be any size (768, 512, 32, ...).
+
+Pair it with an `event_index.json` file -- a JSON array where element `i` identifies
+the patient and event for row `i` of `embeddings.npy`:
+
+```json
+[
+  {"subject_id": "patient_001", "event_index": 42},
+  {"subject_id": "patient_001", "event_index": 17},
+  ...
+]
+```
+
+### Training
+
+```python
+import cadence
+
+classifier = cadence.train(
+    train_jsonl="my_data/train.jsonl",
+    val_jsonl="my_data/val.jsonl",
+    embeddings_path="my_data/embeddings.npy",
+    event_index_path="my_data/event_index.json",
+    n_clusters=50,
+    out_dir="./runs/my_run",
+    n_epochs=30,
+)
+```
+
+### Inference
+
+```python
+preds = cadence.predict(
+    classifier,
+    "my_data/test.jsonl",
+    embeddings_path="my_data/embeddings.npy",
+    event_index_path="my_data/event_index.json",
+)
+# preds is a list of dicts:
+# [{"patient_id": "...", "top_3_clusters": [7, 3, 12],
+#   "top_3_probs": [0.42, 0.31, 0.18], "days_until_next": 14.2}, ...]
+```
+
+### Feature dimensions (public training path)
+
+The public training path uses `5*n_clusters + max_history + 20 + 2*emb_dim` input
+features. For `n_clusters=50`, `max_history=10`, `emb_dim=768`: 1806 dims. The paper
+checkpoint uses 2420 dims (884 base + 768 + 768); the extra 614 base dims require
+MIMIC-specific structured/temporal preprocessing pipelines not available publicly.
+The public model uses the same NVCClean architecture and training schedule (Phase 1
+classification + Phase 2 joint cls+reg + SWA + MixUp + ASL + Gaussian soft targets).
+
+---
+
 ## Reproducibility
 
 Data access requires a signed PhysioNet credentialed account for MIMIC-IV:

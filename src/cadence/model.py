@@ -99,16 +99,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 # model.py lives at <repo>/src/cadence/model.py
-# _SCRIPT_DIR  → <repo>/src/cadence/
-# parents[0]   → <repo>/src/
-# parents[1]   → <repo>/
-# _PROJECT_DIR → <repo>/clinical-record-prediction/  (data, results, sibling src/ live here)
 _SCRIPT_DIR  = Path(__file__).resolve().parent
+# _PROJECT_DIR is kept for the private MIMIC training path only (main()).
+# Public users use cadence.train() from train.py, which has no private deps.
 _PROJECT_DIR = _SCRIPT_DIR.parents[1] / "clinical-record-prediction"
-
-# NOTE: preflight_check and mimic_train_xgb_sex live in the PRIVATE training repo.
-# They are imported lazily inside main() so that PyPI users can do
-# `import cadence` without the private repo being present.
 
 # Clip value for log1p(days); matches LOG_DAYS_CLIP in mimic_train_xgb_sex.py (12.0).
 # Defined here so evaluate() works without the private repo on the path.
@@ -957,28 +951,23 @@ def main() -> None:
     Returns:
       None (outputs written to disk)
     """
-    # ── Private-repo imports (lazy; not available in PyPI installs) ──────────────
+    # ── Feature-engineering imports from public package ──────────────────────────
+    # Since v1.1.0, build_population_prior, load_embeddings, and build_feature_matrix
+    # live in the public cadence package (features.py / data.py).
+    # The private preflight_check is imported lazily so PyPI users can call
+    # cadence.train() without the private repo on the path.
+    from .features import build_population_prior, build_base_feature_matrix as build_feature_matrix
+    from .data import load_embeddings
+
     try:
         sys.path.insert(0, str(_PROJECT_DIR / "src"))
         from preflight_check import preflight
-        # NOTE: We import ONLY feature-engineering utilities from mimic_train_xgb_sex.
-        # The XGBoost *model* is never loaded -- only build_population_prior,
-        # load_embeddings, build_feature_matrix, and LOG_DAYS_CLIP.
-        from mimic_train_xgb_sex import (
-            build_population_prior,
-            load_embeddings,
-            build_feature_matrix,
-            LOG_DAYS_CLIP,
+        preflight()
+    except ImportError:
+        log.warning(
+            "preflight_check not found (private repo not on path). "
+            "Skipping preflight. This is expected for public users calling cadence.main()."
         )
-    except ImportError as _e:
-        raise RuntimeError(
-            "cadence.main() requires the private clinical-record-prediction "
-            "training environment, which is not included in the PyPI package. "
-            "Public users should construct NVCClean directly and load a "
-            "checkpoint via load_checkpoint(). See README for usage."
-        ) from _e
-
-    preflight()
 
     args        = _parse_args()
     seed        = args.seed
@@ -1033,7 +1022,11 @@ def main() -> None:
 
     # ── Population prior + embeddings ────────────────────────────────────────
     prior = build_population_prior(seq_dir / "train.jsonl", n_clusters)
-    embeddings, event_id_map = load_embeddings()
+    mimic_cat_dir = DATA_DIR / "mimic_categories"
+    embeddings, event_id_map = load_embeddings(
+        mimic_cat_dir / "embeddings.npy",
+        mimic_cat_dir / "event_index.json",
+    )
 
     # ── Build 270-dim base feature matrices ───────────────────────────────────
     log.info("=== Building TRAIN features ===")
