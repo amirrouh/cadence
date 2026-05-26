@@ -2,7 +2,7 @@
 cadence/inference.py -- Inference API for NVCClean.
 
 Public users call cadence.predict() to run inference on a trained checkpoint
-(from cadence.train()) or the pre-trained MIMIC checkpoint (from load_checkpoint()).
+(from cadence.train()).
 """
 from __future__ import annotations
 

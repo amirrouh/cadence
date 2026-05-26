@@ -14,8 +14,8 @@ checkpoint (1.1.0 public API vs. 2420-dim paper model):
   Paper checkpoint:    884 base (270 + 150 structured + 464 temporal) + 768 + 768 = 2420 dims
 
 The 150 structured and 464 temporal features are derived from MIMIC-IV-specific
-preprocessing pipelines and are not available for public datasets. Users who want
-the exact paper checkpoint should use load_checkpoint() instead.
+preprocessing pipelines and are not available for public datasets. Train your own
+model on your own data via cadence.train(); pretrained weights are not distributed.
 
 The public model is fully functional and uses the same NVCClean architecture,
 training schedule (Phase 1 classification + Phase 2 cls+reg + SWA), MixUp,

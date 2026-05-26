@@ -19,8 +19,7 @@
 - **Joint prediction** — simultaneous 48-class event classification and time-to-event regression
 - **34.18% top-1 accuracy, 36.95 days MAE** — outperforms XGBoost and all evaluated baselines
 - **Self-knowledge distillation** — improved generalization without external teacher models
-- **Auto-downloads checkpoint** — model weights fetched from GitHub Releases on first use
-- **Drop-in inference** — three lines of code from install to prediction
+- **Train on your own data** — bring your JSONL sequences and per-event embeddings; no MIMIC required
 
 ---
 
@@ -36,30 +35,31 @@ Requires Python 3.10+. No GPU needed for inference.
 
 ## Quick Start
 
+**Pretrained weights not distributed.** The MIMIC-trained classifier is dataset-specific
+(50-cluster space derived from MIMIC text). Transfer to other datasets is not meaningful,
+so we ship the architecture and training code rather than weights. Train your own model
+on your own data using `cadence.train(...)`.
+
 ```python
-import torch
-from cadence import CadenceModel, load_checkpoint
+import cadence
 
-# Load model and pretrained weights (checkpoint auto-downloads on first run)
-model = CadenceModel()
-load_checkpoint(model)
-model.eval()
+classifier = cadence.train(
+    train_jsonl="my_data/train.jsonl",
+    val_jsonl="my_data/val.jsonl",
+    embeddings_path="my_data/embeddings.npy",
+    event_index_path="my_data/event_index.json",
+    n_clusters=50,
+    out_dir="./runs/my_run",
+    n_epochs=30,
+)
 
-# Input: 2420-dimensional feature vector per patient visit
-# [0:884]    — 884 Narrative Velocity (NV) clinical features
-# [884:1652] — 768-dim PubMedBERT mean-pooled cluster-semantic embedding
-# [1652:2420] — 768-dim PubMedBERT last-token cluster-semantic embedding
-x = torch.randn(1, 2420)  # batch_size=1, feature_dim=2420
-
-with torch.no_grad():
-    logits, time_bins = model(x)
-
-# logits    : (batch, 48)  — classification logits over 48 event categories
-# time_bins : (batch, 19)  — regression logits over 19 discretized time bins
-event_probs = torch.softmax(logits, dim=-1)
-top1_event  = event_probs.argmax(dim=-1).item()
-print(f"Predicted next event class : {top1_event}")
-print(f"Top-1 probability          : {event_probs.max().item():.3f}")
+preds = cadence.predict(
+    classifier,
+    "my_data/test.jsonl",
+    embeddings_path="my_data/embeddings.npy",
+    event_index_path="my_data/event_index.json",
+)
+# preds: [{"patient_id": "...", "top_3_clusters": [...], "top_3_probs": [...], "days_until_next": ...}, ...]
 ```
 
 ---
@@ -253,7 +253,7 @@ Once access is granted, follow the preprocessing instructions in `src/` to gener
 
 ## License
 
-This project is released under the [MIT License](https://opensource.org/licenses/MIT). The pretrained model checkpoint is provided for research use only. MIMIC-IV data is subject to its own [PhysioNet Credentialed Health Data License](https://physionet.org/content/mimiciv/view-license/3.1/).
+This project is released under the [MIT License](https://opensource.org/licenses/MIT). MIMIC-IV data is subject to its own [PhysioNet Credentialed Health Data License](https://physionet.org/content/mimiciv/view-license/3.1/).
 
 ---
 

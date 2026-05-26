@@ -39,58 +39,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-
-
-def load_checkpoint(version="v1.0.0"):
-    """
-    Download and load the Cadence checkpoint from GitHub releases.
-
-    On first run, downloads checkpoint_best.pt (~300MB) from:
-    https://github.com/amirrouh/cadence/releases/download/{version}/checkpoint_best.pt
-
-    Subsequent runs load from local cache (~/.cadence/checkpoints/).
-
-    Args:
-        version: Release tag (default: "v1.0.0")
-
-    Returns:
-        dict: Model state dict for loading into NVCClean
-
-    Example:
-        model = NVCClean(...)
-        ckpt = load_checkpoint()
-        model.load_state_dict(ckpt)
-    """
-    import os
-
-    cache_dir = os.path.expanduser("~/.cadence/checkpoints")
-    os.makedirs(cache_dir, exist_ok=True)
-    ckpt_path = os.path.join(cache_dir, "checkpoint_best.pt")
-
-    # Return from cache if exists
-    if os.path.exists(ckpt_path):
-        logging.info(f"Loading checkpoint from cache: {ckpt_path}")
-        return torch.load(ckpt_path, map_location="cpu")
-
-    # Download from GitHub
-    url = f"https://github.com/amirrouh/cadence/releases/download/{version}/checkpoint_best.pt"
-    logging.info(f"Downloading checkpoint from {url}...")
-
-    try:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url,
-            model_dir=cache_dir,
-            map_location="cpu"
-        )
-        logging.info(f"Checkpoint cached at {ckpt_path}")
-        return state_dict
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to download checkpoint from GitHub.\n"
-            f"URL: {url}\n"
-            f"Error: {e}\n"
-            f"Manual download: https://github.com/amirrouh/cadence/releases"
-        ) from e
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

@@ -12,9 +12,9 @@ Achieves 34.18% top-1 accuracy and 36.95 days MAE on MIMIC-IV (paper checkpoint)
 Public training API (v1.1.0): supply your own JSONL data and per-event embeddings.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
-from cadence.model import NVCClean, load_checkpoint, main
+from cadence.model import NVCClean, main
 from cadence.features import build_feature_matrix, build_population_prior
 from cadence.data import load_embeddings, validate_jsonl
 from cadence.train import train
@@ -22,7 +22,6 @@ from cadence.inference import predict
 
 __all__ = [
     "NVCClean",
-    "load_checkpoint",
     "main",
     "build_feature_matrix",
     "build_population_prior",
