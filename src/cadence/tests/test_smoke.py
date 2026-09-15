@@ -9,6 +9,7 @@ per split, emb_dim=32, n_clusters=4).
 """
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -49,6 +50,7 @@ def test_smoke() -> None:
             "model_path", "out_dir", "n_features", "n_clusters", "n_classes",
             "bin_edges", "bin_centers", "feat_mean", "feat_std",
             "val_metrics", "test_metrics", "metadata",
+            "population_prior_path",
         }
         missing = required_keys - set(result.keys())
         assert not missing, f"cadence.train() result missing keys: {missing}"
@@ -65,6 +67,9 @@ def test_smoke() -> None:
 
         model_path = Path(result["model_path"])
         assert model_path.exists(), f"best_model.pt not written: {model_path}"
+
+        prior_path = Path(result["population_prior_path"])
+        assert prior_path.exists(), f"population_prior.json not written: {prior_path}"
 
         # ------------------------------------------------------------------ #
         # Inference
@@ -97,6 +102,77 @@ def test_smoke() -> None:
     print(f"  val top1={val_m['top1_acc']:.4f}  val mae={val_m['mae_days']:.1f}d")
     print(f"  {len(preds)} predictions returned, sample: {preds[0]}")
 
+def test_inference_does_not_use_test_targets() -> None:
+    import cadence
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        out_dir = tmp_dir / "leakage_test_run"
+
+        result = cadence.train(
+            train_jsonl=TOY_DIR / "train.jsonl",
+            val_jsonl=TOY_DIR / "val.jsonl",
+            embeddings_path=TOY_DIR / "embeddings.npy",
+            event_index_path=TOY_DIR / "event_index.json",
+            n_clusters=4,
+            out_dir=out_dir,
+            n_epochs=2,
+        )
+
+        original_records = []
+
+        with open(TOY_DIR / "test.jsonl", "r", encoding="utf-8") as f:
+            for line in f:
+                original_records.append(json.loads(line))
+
+        changed_records = []
+
+        for record in original_records:
+            changed = json.loads(json.dumps(record))
+
+            changed["target"]["cluster_id"] = (
+                changed["target"]["cluster_id"] + 1
+            ) % 4
+
+            changed["target"]["days_from_prev"] += 1000
+
+            changed_records.append(changed)
+
+        changed_test_path = tmp_dir / "test_changed_targets.jsonl"
+
+        with open(changed_test_path, "w", encoding="utf-8") as f:
+            for record in changed_records:
+                f.write(json.dumps(record) + "\n")
+
+        preds_original = cadence.predict(
+            result,
+            TOY_DIR / "test.jsonl",
+            embeddings_path=TOY_DIR / "embeddings.npy",
+            event_index_path=TOY_DIR / "event_index.json",
+        )
+
+        preds_changed = cadence.predict(
+            result,
+            changed_test_path,
+            embeddings_path=TOY_DIR / "embeddings.npy",
+            event_index_path=TOY_DIR / "event_index.json",
+        )
+
+        assert len(preds_original) == len(preds_changed)
+
+        for original, changed in zip(preds_original, preds_changed):
+            assert original["patient_id"] == changed["patient_id"]
+            assert original["top_3_clusters"] == changed["top_3_clusters"]
+
+            assert np.allclose(
+                original["top_3_probs"],
+                changed["top_3_probs"],
+            )
+
+            assert np.isclose(
+                original["days_until_next"],
+                changed["days_until_next"],
+            )
 
 def test_smoke_binary() -> None:
     import cadence

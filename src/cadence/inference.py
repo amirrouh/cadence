@@ -17,7 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from .data import load_embeddings
-from .features import build_feature_matrix, build_population_prior
+from .features import build_feature_matrix
 
 log = logging.getLogger(__name__)
 
@@ -141,9 +141,31 @@ def predict(
     # -------------------------------------------------------------------------
     # Build population prior and feature matrix
     # -------------------------------------------------------------------------
-    prior = build_population_prior(jsonl_path, n_clusters)
+    prior_path_raw = classifier.get("population_prior_path")
+
+    if prior_path_raw is None:
+        raise ValueError(
+            "Classifier is missing population_prior_path. "
+            "Retrain with cadence.train() so inference can use the training-derived prior."
+        )
+
+    prior_path = Path(prior_path_raw)
+
+    if not prior_path.exists():
+        raise FileNotFoundError(
+            f"Training population prior not found: {prior_path}"
+        )
+
+    with open(prior_path, "r", encoding="utf-8") as fp:
+        prior = json.load(fp)
+
     X, _, _ = build_feature_matrix(
-        jsonl_path, prior, embeddings, event_id_map, n_clusters, max_history
+        jsonl_path,
+        prior,
+        embeddings,
+        event_id_map,
+        n_clusters,
+        max_history,
     )
 
     # Standardize
