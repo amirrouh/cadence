@@ -456,6 +456,13 @@ def train(
     # Population prior
     prior = build_population_prior(train_jsonl, n_clusters)
 
+    prior_path = out_dir / "population_prior.json"
+
+    with open(prior_path, "w", encoding="utf-8") as fp:
+        json.dump(prior, fp, indent=2)
+
+    log.info("Saved training population prior to %s", prior_path)
+
     # Feature matrices
     log.info("=== Building TRAIN features ===")
     X_train, y_cls_train, y_reg_train = build_feature_matrix(
@@ -641,6 +648,7 @@ def train(
             "best_val_metric":      best_val_m.get("val_auroc", best_val_m.get("accuracy")),
             "stopped_early":        stopped_early_clf,
             "class_weight_applied": cw_applied,
+            "population_prior_path": str(prior_path),
         }
         log.info("Training complete (task=%s). Outputs written to: %s", task, out_dir)
         return result
@@ -957,6 +965,7 @@ def train(
         "val_metrics":  val_m_final,
         "test_metrics": test_m_final,
         "metadata":     metadata,
+        "population_prior_path": str(prior_path),
     }
     log.info("Training complete. Outputs written to: %s", out_dir)
     return result
